@@ -59,7 +59,7 @@ COLUMNAS_CSV = [
 # ─────────────────────────────────────────────
 #  UTILIDADES
 # ─────────────────────────────────────────────
-def formatear_rut(rut: str) -> str:
+def formatear_rut(rut):
     """Normaliza el RUT al formato 12345678-9, quitando ceros a la izquierda."""
     if not rut:
         return rut
@@ -73,7 +73,7 @@ def formatear_rut(rut: str) -> str:
     return f"{cuerpo}-{dv}"
 
 
-def _corregir_filename(nombre: str) -> str:
+def _corregir_filename(nombre):
     """Corrige el encoding de nombres en ZIP (Mac UTF-8 NFD o Windows CP1252)."""
     try:
         # Si el nombre tiene caracteres corruptos, intentar recodificar
@@ -86,13 +86,13 @@ def _corregir_filename(nombre: str) -> str:
         return nombre
 
 
-def parsear_nombre_pdf(filename: str) -> tuple[str, str]:
+def parsear_nombre_pdf(filename):
     """Retorna (nombre_sin_extension, nombre_con_extension)."""
     path = PurePosixPath(filename)
     return path.stem, path.name
 
 
-def procesar_zip(archivo_zip) -> tuple[list[dict], list[str], dict]:
+def procesar_zip(archivo_zip):
     """Procesa el ZIP y retorna (filas_csv, errores, stats)."""
     filas = []
     errores = []
@@ -159,7 +159,7 @@ def procesar_zip(archivo_zip) -> tuple[list[dict], list[str], dict]:
     return filas, errores, stats
 
 
-def generar_csv(filas: list[dict]) -> str:
+def generar_csv(filas):
     """Genera el contenido del CSV a partir de las filas."""
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=COLUMNAS_CSV)
@@ -224,7 +224,7 @@ if archivo_zip is not None:
                     st.download_button(
                         label="⬇️ Descargar configuracion.csv",
                         data=contenido_csv.encode("utf-8"),
-                        file_name=f"configuracion.csv",
+                        file_name="configuracion.csv",
                         mime="text/csv",
                         use_container_width=True,
                     )
