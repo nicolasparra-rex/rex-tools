@@ -638,9 +638,79 @@ def procesar_archivo(uploaded_file):
 #  UI
 # ─────────────────────────────────────────────
 
-archivo = st.file_uploader("Selecciona el archivo Excel", type=["xlsm", "xlsx"])
+# Instrucciones del formato del archivo
+st.markdown("### 📄 Formato del archivo")
+
+col_i1, col_i2, col_i3 = st.columns(3)
+
+with col_i1:
+    st.markdown(
+        '<div style="background:white;border:1px solid #E8EEF3;border-radius:12px;padding:1.25rem;height:100%;">'
+        '<div style="color:#1EBBEF;font-weight:700;font-size:0.75rem;letter-spacing:0.5px;margin-bottom:0.5rem;">NOMBRE DEL ARCHIVO</div>'
+        '<div style="color:#1A3A5F;font-size:1rem;font-weight:600;margin-bottom:0.25rem;">maestro_empleados</div>'
+        '<div style="color:#8B9DAE;font-size:0.8rem;">El archivo debe llamarse <strong>maestro_empleados</strong></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+with col_i2:
+    st.markdown(
+        '<div style="background:white;border:1px solid #E8EEF3;border-radius:12px;padding:1.25rem;height:100%;">'
+        '<div style="color:#1EBBEF;font-weight:700;font-size:0.75rem;letter-spacing:0.5px;margin-bottom:0.5rem;">EXTENSIÓN</div>'
+        '<div style="color:#1A3A5F;font-size:1rem;font-weight:600;margin-bottom:0.25rem;">.xlsm o .xlsx</div>'
+        '<div style="color:#8B9DAE;font-size:0.8rem;">Formato Excel con o sin macros habilitadas</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+with col_i3:
+    st.markdown(
+        '<div style="background:white;border:1px solid #E8EEF3;border-radius:12px;padding:1.25rem;height:100%;">'
+        '<div style="color:#1EBBEF;font-weight:700;font-size:0.75rem;letter-spacing:0.5px;margin-bottom:0.5rem;">HOJA</div>'
+        '<div style="color:#1A3A5F;font-size:1rem;font-weight:600;margin-bottom:0.25rem;">Empleados</div>'
+        '<div style="color:#8B9DAE;font-size:0.8rem;">El <strong>encabezado</strong> debe estar en la <strong>línea 1</strong></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown("")  # espaciado
+
+st.markdown("### 📤 Subir archivo")
+archivo = st.file_uploader(
+    "Selecciona el archivo Excel",
+    type=["xlsm", "xlsx"],
+    help="El archivo debe llamarse 'maestro_empleados' y tener una hoja llamada 'Empleados' con el encabezado en la línea 1.",
+)
 
 if archivo:
+    # ─── Validaciones previas del archivo ───
+    nombre_archivo = archivo.name
+    nombre_sin_ext = nombre_archivo.rsplit(".", 1)[0].lower().replace(" ", "_").replace("-", "_")
+
+    # Advertir si el nombre no corresponde (pero no bloquear — puede que tenga un prefijo o sufijo)
+    if "maestro_empleados" not in nombre_sin_ext and "maestroempleados" not in nombre_sin_ext:
+        st.warning(
+            f"⚠️ El archivo subido se llama **{nombre_archivo}**. "
+            f"Se esperaba un archivo llamado **maestro_empleados**. "
+            f"Procederemos igualmente, pero revisa que sea el archivo correcto."
+        )
+
+    # Validar que la hoja "Empleados" exista
+    try:
+        xl = pd.ExcelFile(archivo)
+        hojas = xl.sheet_names
+        archivo.seek(0)  # resetear el cursor para que procesar_archivo pueda leerlo
+        if "Empleados" not in hojas:
+            st.error(
+                f"❌ El archivo no contiene una hoja llamada **'Empleados'**. "
+                f"Hojas encontradas: {', '.join(hojas)}. "
+                f"Asegúrate que los datos estén en una hoja llamada exactamente 'Empleados'."
+            )
+            st.stop()
+    except Exception as e:
+        st.error(f"❌ No se pudo leer el archivo Excel: {e}")
+        st.stop()
+
     with st.spinner("Procesando archivo..."):
         try:
             df, errores, total_original, filas_eliminadas, correcciones, correcciones_ubicacion = procesar_archivo(archivo)
