@@ -42,7 +42,7 @@ hero(
 # ─────────────────────────────────────────────
 #  CONFIGURACIÓN
 # ─────────────────────────────────────────────
-TIPO_DOCUMENTO = "HQB"
+TIPO_DOCUMENTO = "RES"
 OPCION_EMITIR  = "N"
 CONTRATO       = "1"
 
@@ -224,7 +224,7 @@ if archivo_zip is not None:
                     st.download_button(
                         label="⬇️ Descargar configuracion.csv",
                         data=contenido_csv.encode("utf-8"),
-                        file_name=f"configuracion_{timestamp}.csv",
+                        file_name=f"configuracion.csv",
                         mime="text/csv",
                         use_container_width=True,
                     )
