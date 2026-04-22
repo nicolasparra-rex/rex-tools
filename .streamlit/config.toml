@@ -10,4 +10,4 @@ toolbarMode = "minimal"
 showErrorDetails = true
 
 [server]
-maxUploadSize = 200
+maxUploadSize = 1024
