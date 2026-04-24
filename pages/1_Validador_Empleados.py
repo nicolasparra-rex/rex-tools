@@ -80,7 +80,7 @@ formatos_posibles = [
     "%Y/%m/%d", "%d-%m-%y", "%d/%m/%y", "%m/%d/%Y",
 ]
 
-TELEFONO_DEFAULT = "56 9 2222 2222"
+TELEFONO_DEFAULT = "+56922222222"
 EMAIL_DEFAULT    = "email@email.com"
 
 
@@ -270,8 +270,129 @@ def convertir_email_minuscula(valor):
     return str(valor).strip().lower()
 
 
+# ─────────────────────────────────────────────
+#  MAESTROS DE AFP Y SALUD
+# ─────────────────────────────────────────────
+
+AFP_MAESTRO = {
+    "capital":   "AFP Capital",
+    "cuprum":    "AFP Cuprum",
+    "habitat":   "AFP Habitat",
+    "modelo":    "AFP Modelo",
+    "planvital": "AFP Planvital",
+    "provida":   "AFP Provida",
+    "uno":       "AFP UNO",
+    "canaempu":  "Canaemput",
+    "capremer":  "Capremer",
+    "empart":    "Empart",
+    "sss":       "Servicio Seguro Social",
+    "afp":       "Sin definir",
+    "triomar":   "Triomar",
+}
+
+SALUD_MAESTRO = {
+    "fonasa":       "FONASA",
+    "isalud":       "ISALUD ISAPRE de Codelco LTDA",
+    "bancoestado":  "ISAPRE Banco Estado",
+    "banmedica":    "ISAPRE Banmedica",
+    "chuquicamata": "ISAPRE Chuquicamata",
+    "colmena":      "ISAPRE Colmena",
+    "consalud":     "ISAPRE Consalud",
+    "cruzblanca":   "ISAPRE Cruz-Blanca",
+    "cruzdelnorte": "ISAPRE Cruz del Norte",
+    "esencial":     "ISAPRE Esencial",
+    "fusat":        "ISAPRE Fusat",
+    "nuevamasvida": "ISAPRE Nueva Mas Vida",
+    "vidatres":     "ISAPRE Vidatres",
+    "isapre":       "Sin definir",
+}
+
+
+def _normalizar_aseguradora(texto):
+    """Quita prefijos tipo 'AFP', 'ISAPRE', 'Sociedad', etc. y espacios/tildes."""
+    if _vacio(texto):
+        return ""
+    s = _normalizar_texto(texto)
+    # Quitar prefijos comunes
+    prefijos = ["afp ", "isapre ", "isapre de ", "sociedad ", "s.a.", "sa ", "ltda", "ltda."]
+    for pref in prefijos:
+        if s.startswith(pref):
+            s = s[len(pref):]
+    # Quitar sufijos comunes
+    for suf in [" s.a.", " sa", " ltda.", " ltda", " spa"]:
+        if s.endswith(suf):
+            s = s[:-len(suf)]
+    # Quitar espacios, guiones y caracteres raros
+    return s.replace(" ", "").replace("-", "").replace(".", "").strip()
+
+
+def resolver_afp(valor):
+    """Convierte cualquier variante de nombre de AFP al ID oficial.
+
+    Ej: 'AFP Capital' → 'capital', 'Habitat S.A.' → 'habitat'.
+    Retorna (id_resuelto, cambio_realizado) donde cambio puede ser None.
+    """
+    if _vacio(valor):
+        return valor, None
+
+    original = str(valor).strip()
+    normalizado = _normalizar_aseguradora(original)
+
+    # Si ya es el ID exacto (minúscula) → no hay cambio
+    if original.lower() in AFP_MAESTRO:
+        return original.lower(), None
+
+    # Buscar por nombre normalizado
+    for afp_id in AFP_MAESTRO:
+        if normalizado == afp_id:
+            if original != afp_id:
+                return afp_id, f"AFP convertida a ID: '{original}' → '{afp_id}'"
+            return afp_id, None
+
+    # Buscar por nombre completo normalizado del maestro
+    for afp_id, nombre_oficial in AFP_MAESTRO.items():
+        if _normalizar_aseguradora(nombre_oficial) == normalizado:
+            return afp_id, f"AFP convertida a ID: '{original}' → '{afp_id}'"
+
+    # No se pudo resolver — devolver sin cambio (se marcará como error después)
+    return original, None
+
+
+def resolver_salud(valor):
+    """Convierte cualquier variante de nombre de Isapre/Fonasa al ID oficial.
+
+    Ej: 'ISAPRE Banmedica' → 'banmedica', 'Cruz Blanca' → 'cruzblanca'.
+    Retorna (id_resuelto, cambio_realizado) donde cambio puede ser None.
+    """
+    if _vacio(valor):
+        return valor, None
+
+    original = str(valor).strip()
+    normalizado = _normalizar_aseguradora(original)
+
+    # Si ya es el ID exacto (minúscula) → no hay cambio
+    if original.lower() in SALUD_MAESTRO:
+        return original.lower(), None
+
+    # Buscar por nombre normalizado
+    for salud_id in SALUD_MAESTRO:
+        if normalizado == salud_id:
+            if original != salud_id:
+                return salud_id, f"Salud convertida a ID: '{original}' → '{salud_id}'"
+            return salud_id, None
+
+    # Buscar por nombre completo normalizado del maestro
+    for salud_id, nombre_oficial in SALUD_MAESTRO.items():
+        if _normalizar_aseguradora(nombre_oficial) == normalizado:
+            return salud_id, f"Salud convertida a ID: '{original}' → '{salud_id}'"
+
+    # No se pudo resolver — devolver sin cambio (se marcará como error después)
+    return original, None
+
+
 def normalizar_telefono(valor):
-    """Normaliza a formato '56 9 XXXX XXXX'. Retorna (valor_normalizado, cambio, valido)."""
+    """Normaliza a formato '+56XXXXXXXXX' (todo pegado con + al inicio).
+    Retorna (valor_normalizado, cambio, valido)."""
     if _vacio(valor):
         return TELEFONO_DEFAULT, "completado", True
 
@@ -281,14 +402,14 @@ def normalizar_telefono(valor):
 
     # Casos posibles
     if digitos.startswith("56") and len(digitos) == 11:
-        # +56 + 9 dígitos → 56 X XXXX XXXX
-        formateado = f"56 {digitos[2]} {digitos[3:7]} {digitos[7:]}"
+        # Ya trae código país + 9 dígitos → +56XXXXXXXXX
+        formateado = f"+{digitos}"
     elif len(digitos) == 9:
-        # 9 dígitos sin código país
-        formateado = f"56 {digitos[0]} {digitos[1:5]} {digitos[5:]}"
+        # 9 dígitos sin código país → agregar 56 adelante
+        formateado = f"+56{digitos}"
     elif len(digitos) == 8:
         # Fijo antiguo sin código área — asumimos Santiago (2)
-        formateado = f"56 2 {digitos[:4]} {digitos[4:]}"
+        formateado = f"+562{digitos}"
     else:
         # No se pudo normalizar — marcar como inválido
         return original, "sin_cambios", False
@@ -460,6 +581,8 @@ def procesar_archivo(uploaded_file):
         "regiones_corregidas":       0,
         "ciudades_corregidas":       0,
         "caracteres_reparados":      int(mojibake_reparados),
+        "afp_normalizadas":          0,
+        "salud_normalizadas":        0,
     }
 
     # Lista de correcciones de ubicación hechas (para el reporte)
@@ -498,6 +621,20 @@ def procesar_archivo(uploaded_file):
         resultados = df["Comuna"].apply(resolver_comuna)
         df["Comuna"] = resultados.apply(lambda r: r[0])
         correcciones["comunas_rellenadas"] = (antes.fillna("") != df["Comuna"].fillna("")).sum()
+
+    # ───── AFP: normalizar a ID oficial ─────
+    if "Id AFP" in df.columns:
+        antes = df["Id AFP"].copy()
+        resultados = df["Id AFP"].apply(resolver_afp)
+        df["Id AFP"] = resultados.apply(lambda r: r[0])
+        correcciones["afp_normalizadas"] = (antes.fillna("") != df["Id AFP"].fillna("")).sum()
+
+    # ───── Salud: normalizar a ID oficial ─────
+    if "ID INSTITUCION DE SALUD" in df.columns:
+        antes = df["ID INSTITUCION DE SALUD"].copy()
+        resultados = df["ID INSTITUCION DE SALUD"].apply(resolver_salud)
+        df["ID INSTITUCION DE SALUD"] = resultados.apply(lambda r: r[0])
+        correcciones["salud_normalizadas"] = (antes.fillna("") != df["ID INSTITUCION DE SALUD"].fillna("")).sum()
 
     # ───── Emails ─────
     for campo in campos_email:
@@ -729,6 +866,10 @@ if archivo:
             c1, c2 = st.columns(2)
             c1.metric("🗺️ Regiones corregidas",         correcciones["regiones_corregidas"])
             c2.metric("🏙️ Ciudades corregidas",         correcciones["ciudades_corregidas"])
+
+            c1, c2 = st.columns(2)
+            c1.metric("🏦 AFP normalizadas",            correcciones["afp_normalizadas"])
+            c2.metric("🏥 Salud normalizadas",          correcciones["salud_normalizadas"])
 
             if correcciones["caracteres_reparados"] > 0:
                 st.info(
