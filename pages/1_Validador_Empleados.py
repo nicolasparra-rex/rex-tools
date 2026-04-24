@@ -561,7 +561,7 @@ def procesar_archivo(uploaded_file):
         if df[col].dtype == object:  # solo columnas de texto
             antes = df[col].copy()
             df[col] = df[col].apply(reparar_mojibake)
-            mojibake_reparados += (antes.fillna("") != df[col].fillna("")).sum()
+            mojibake_reparados += int((antes.fillna("") != df[col].fillna("")).sum())
 
     # Filtrar solo empleados activos
     if "Situación" in df.columns:
@@ -592,7 +592,7 @@ def procesar_archivo(uploaded_file):
     if "Id empleado" in df.columns:
         antes = df["Id empleado"].copy()
         df["Id empleado"] = df["Id empleado"].apply(validar_corregir_id)
-        correcciones["ids_corregidos"] = (antes != df["Id empleado"]).sum()
+        correcciones["ids_corregidos"] = int((antes.fillna("") != df["Id empleado"].fillna("")).sum())
 
     # ───── Centro de costo y sede (fijos) ─────
     if "Id centro de costo" in df.columns:
@@ -605,7 +605,7 @@ def procesar_archivo(uploaded_file):
         if campo in df.columns:
             antes = df[campo].copy()
             df[campo] = df[campo].apply(convertir_fecha)
-            correcciones["fechas_normalizadas"] += (antes.fillna("") != df[campo].fillna("")).sum()
+            correcciones["fechas_normalizadas"] += int((antes.fillna("") != df[campo].fillna("")).sum())
 
     # ───── Dirección ─────
     campos_direccion = ["Nombre Calle", "Numero Calle", "Departamento"]
@@ -613,28 +613,28 @@ def procesar_archivo(uploaded_file):
         if campo in df.columns:
             antes = df[campo].copy()
             df[campo] = df[campo].apply(limpiar_direccion)
-            correcciones["direcciones_limpiadas"] += (antes.fillna("") != df[campo].fillna("")).sum()
+            correcciones["direcciones_limpiadas"] += int((antes.fillna("") != df[campo].fillna("")).sum())
 
     # ───── Comuna: resolver nombre → código y aplicar zfill(5) ─────
     if "Comuna" in df.columns:
         antes = df["Comuna"].copy()
         resultados = df["Comuna"].apply(resolver_comuna)
         df["Comuna"] = resultados.apply(lambda r: r[0])
-        correcciones["comunas_rellenadas"] = (antes.fillna("") != df["Comuna"].fillna("")).sum()
+        correcciones["comunas_rellenadas"] = int((antes.fillna("") != df["Comuna"].fillna("")).sum())
 
     # ───── AFP: normalizar a ID oficial ─────
     if "Id AFP" in df.columns:
         antes = df["Id AFP"].copy()
         resultados = df["Id AFP"].apply(resolver_afp)
         df["Id AFP"] = resultados.apply(lambda r: r[0])
-        correcciones["afp_normalizadas"] = (antes.fillna("") != df["Id AFP"].fillna("")).sum()
+        correcciones["afp_normalizadas"] = int((antes.fillna("") != df["Id AFP"].fillna("")).sum())
 
     # ───── Salud: normalizar a ID oficial ─────
     if "ID INSTITUCION DE SALUD" in df.columns:
         antes = df["ID INSTITUCION DE SALUD"].copy()
         resultados = df["ID INSTITUCION DE SALUD"].apply(resolver_salud)
         df["ID INSTITUCION DE SALUD"] = resultados.apply(lambda r: r[0])
-        correcciones["salud_normalizadas"] = (antes.fillna("") != df["ID INSTITUCION DE SALUD"].fillna("")).sum()
+        correcciones["salud_normalizadas"] = int((antes.fillna("") != df["ID INSTITUCION DE SALUD"].fillna("")).sum())
 
     # ───── Emails ─────
     for campo in campos_email:
@@ -643,12 +643,12 @@ def procesar_archivo(uploaded_file):
             # Normalizar a minúscula
             df[campo] = df[campo].apply(convertir_email_minuscula)
             # Completar vacíos
-            mask_vacios = df[campo].apply(_vacio)
-            correcciones["emails_vacios_completados"] += mask_vacios.sum()
+            mask_vacios = df[campo].apply(_vacio).astype(bool)
+            correcciones["emails_vacios_completados"] += int(mask_vacios.sum())
             df.loc[mask_vacios, campo] = EMAIL_DEFAULT
             # Contar los que se pasaron a minúscula (excluyendo los completados)
             cambios_case = (antes.fillna("") != df[campo].fillna("")) & ~mask_vacios
-            correcciones["emails_minuscula"] += cambios_case.sum()
+            correcciones["emails_minuscula"] += int(cambios_case.sum())
 
     # ───── Teléfonos ─────
     for campo in campos_telefono:
