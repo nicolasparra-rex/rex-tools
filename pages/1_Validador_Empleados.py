@@ -563,9 +563,9 @@ def procesar_archivo(uploaded_file):
             df[col] = df[col].apply(reparar_mojibake)
             mojibake_reparados += int((antes.fillna("") != df[col].fillna("")).sum())
 
-    # Filtrar solo empleados activos
+    # Filtrar solo empleados con Situación A o F
     if "Situación" in df.columns:
-        df = df[df["Situación"].str.strip().str.upper() == "A"].reset_index(drop=True)
+        df = df[df["Situación"].str.strip().str.upper().isin(["A", "F"])].reset_index(drop=True)
     filas_eliminadas = total_original - len(df)
 
     # Contador de correcciones
@@ -845,7 +845,7 @@ if archivo:
             st.markdown("### Resumen general")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Filas originales", total_original)
-            c2.metric("Filas eliminadas (no A)", filas_eliminadas)
+            c2.metric("Filas eliminadas (no A/F)", filas_eliminadas)
             c3.metric("Filas procesadas", len(df))
             c4.metric("Filas con errores", len(errores))
 
@@ -924,7 +924,7 @@ if archivo:
             # ─── Reporte en texto ───
             reporte_txt = "REPORTE DE VALIDACION\n" + "=" * 60 + "\n\n"
             reporte_txt += f"Filas originales: {total_original}\n"
-            reporte_txt += f"Filas eliminadas (no A): {filas_eliminadas}\n"
+            reporte_txt += f"Filas eliminadas (no A/F): {filas_eliminadas}\n"
             reporte_txt += f"Filas procesadas: {len(df)}\n\n"
             reporte_txt += "CORRECCIONES APLICADAS\n" + "-" * 40 + "\n"
             for k, v in correcciones.items():
