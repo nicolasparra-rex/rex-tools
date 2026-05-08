@@ -2,11 +2,26 @@ import sys
 from pathlib import Path
 import streamlit as st
 
-# Agregar la carpeta acta_app al path para importar sus módulos
-sys.path.insert(0, str(Path(__file__).parent.parent / "acta_app"))
-
-# Neutralizar set_page_config pero mantener layout="wide"
+# Neutralizar set_page_config para evitar conflicto con el hub
 st.set_page_config = lambda **kwargs: None
 
-# Ejecutar la app directamente
+# Forzar ancho completo
+st.markdown("""
+<style>
+    .block-container { max-width: 100% !important; padding-left: 2rem !important; padding-right: 2rem !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# Neutralizar solo el header HTML de acta_app
+_original_markdown = st.markdown
+def _filtrar_header(body, **kwargs):
+    if isinstance(body, str) and "rex-header" in body:
+        return
+    return _original_markdown(body, **kwargs)
+st.markdown = _filtrar_header
+
+# Agregar la carpeta acta_app al path
+sys.path.insert(0, str(Path(__file__).parent.parent / "acta_app"))
+
+# Ejecutar la app
 exec(open(Path(__file__).parent.parent / "acta_app" / "app.py").read())
