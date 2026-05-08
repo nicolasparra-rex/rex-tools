@@ -5,13 +5,6 @@ import streamlit as st
 # Neutralizar set_page_config para evitar conflicto con el hub
 st.set_page_config = lambda **kwargs: None
 
-# Forzar ancho completo
-st.markdown("""
-<style>
-    .block-container { max-width: 100% !important; padding-left: 2rem !important; padding-right: 2rem !important; }
-</style>
-""", unsafe_allow_html=True)
-
 # Neutralizar solo el header HTML de acta_app
 _original_markdown = st.markdown
 def _filtrar_header(body, **kwargs):
