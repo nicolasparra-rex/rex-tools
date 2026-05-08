@@ -127,3 +127,5 @@ m3.metric("🔜 En desarrollo", "0")
 m4.metric("📅 Versión", "1.2")
 
 aplicar_footer()
+
+
