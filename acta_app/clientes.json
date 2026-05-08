@@ -1,0 +1,30 @@
+{
+  "clientes": [
+    {
+      "nombre_display": "CYGNUS",
+      "empresa": "RE-2565 - Adquisiciones y Servicios Empresariales S.A (CYGNUS)",
+      "plan": "FULL",
+      "jefe_cliente": "DAFNE TOLEDO SANTIBAÑEZ",
+      "usuario_impl": "PATRICIA MARTINEZ",
+      "email_impl": "patricia.martinez@cygnus.cl",
+      "jefe_rex": "GABRIELA AHUMADA",
+      "email_jefe_rex": "Gabriela.ahumada@visma.com",
+      "consultor": "DIEGO GALVEZ",
+      "horas": 4,
+      "keyword_drive": "cygnus"
+    },
+    {
+      "nombre_display": "VIGIAS",
+      "empresa": "RE-2426 - ( Rex Full) - Empresa de Seguridad Vigias Security SpA",
+      "plan": "BASE",
+      "jefe_cliente": "Javiera Calderon Valdés",
+      "usuario_impl": "Javiera Calderon Valdés",
+      "email_impl": " javiera.calderon@vigiaseguridad.cl",
+      "jefe_rex": "GABRIELA AHUMADA",
+      "email_jefe_rex": "Gabriela.ahumada@visma.com",
+      "consultor": "DIEGO GALVEZ",
+      "horas": 4,
+      "keyword_drive": "vigias"
+    }
+  ]
+}
