@@ -13,8 +13,14 @@ import pandas as pd
 from extractor import extract_all
 from generator import generate_acta
 
-CLIENTES_PATH = Path(__file__).parent / "clientes.json"
-EQUIPO_PATH   = Path(__file__).parent / "equipo.json"
+# Resolver ruta correctamente tanto en ejecución directa como desde pages/
+_BASE_DIR = Path(__file__).parent
+# Si se ejecuta desde pages/, subir un nivel y entrar a acta_app/
+if _BASE_DIR.name == "pages":
+    _BASE_DIR = _BASE_DIR.parent / "acta_app"
+
+CLIENTES_PATH = _BASE_DIR / "clientes.json"
+EQUIPO_PATH   = _BASE_DIR / "equipo.json"
 
 st.set_page_config(
     page_title="Acta de Implementación · REX+",
@@ -519,7 +525,14 @@ with col_right:
     step_pill(6, "Sube las notas de Gemini", done=st.session_state.notes_extracted)
     st.markdown("## Notas de sesión (Gemini)")
 
-    from drive_client import is_configured, search_gemini_notes, download_docx
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from drive_client import is_configured, search_gemini_notes, download_docx
+    except ModuleNotFoundError:
+        def is_configured(): return False
+        def search_gemini_notes(k): return []
+        def download_docx(i): return None
 
     # ── Modo: Drive o upload manual ──────────────────────────────────────────
     drive_ok = is_configured()
@@ -693,4 +706,3 @@ with st.expander("⚙️ Configurar acceso a Google Drive"):
             st.success("✓ Token guardado. Reinicia la app para activar Drive.")
         else:
             st.error("Pega el refresh token antes de guardar.")
-
