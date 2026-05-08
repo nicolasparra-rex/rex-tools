@@ -96,17 +96,23 @@ with col3:
 
 with col4:
     st.markdown(
-        '<div class="rex-tool-card" style="opacity:0.6;">'
-        '<div class="rex-tool-icon dark">⚙️</div>'
-        '<div class="rex-tool-title">Próximamente</div>'
+        '<div class="rex-tool-card">'
+        '<div class="rex-tool-icon lime">📝</div>'
+        '<div class="rex-tool-title">Acta de Implementación</div>'
         '<div class="rex-tool-desc">'
-        'Espacio reservado para la próxima herramienta Rex+. '
-        'Si tienes una idea o necesitas automatizar algún proceso, ¡pídelo!'
+        'Genera actas de implementación automáticamente a partir de los datos '
+        'del cliente y configuración del proyecto.'
         '</div>'
-        '<span class="rex-tool-tag proximo">PRÓXIMAMENTE</span>'
+        '<span class="rex-tool-tag activa">ACTIVA</span>'
+        '<span class="rex-tool-tag">Acta</span>'
+        '<span class="rex-tool-tag">Word</span>'
+        '<br/><br/>'
+        '<span class="rex-tool-cta">Abrir herramienta →</span>'
         '</div>',
         unsafe_allow_html=True,
     )
+    if st.button("Abrir Acta Implementación", key="btn_acta", use_container_width=True):
+        st.switch_page("pages/4_Acta_Implementacion.py")
 
 # ─────────────────────────────────────────────
 #  ESTADÍSTICAS RÁPIDAS
@@ -115,9 +121,9 @@ st.markdown("---")
 st.markdown("### Resumen")
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("🛠️ Herramientas", "3")
-m2.metric("✅ Activas", "3")
+m1.metric("🛠️ Herramientas", "4")
+m2.metric("✅ Activas", "4")
 m3.metric("🔜 En desarrollo", "0")
-m4.metric("📅 Versión", "1.1")
+m4.metric("📅 Versión", "1.2")
 
 aplicar_footer()
