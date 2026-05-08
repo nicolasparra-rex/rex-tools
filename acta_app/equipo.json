@@ -1,0 +1,21 @@
+{
+  "jefes": [
+    { "nombre": "GABRIELA AHUMADA",  "email": "gabriela.ahumada@visma.com" },
+    { "nombre": "EDUARDO QUILAMAN",  "email": "eduardo.quilaman@visma.com" },
+    { "nombre": "JAVIERA TORRES",    "email": "javiera.torres@visma.com" }
+  ],
+  "consultores": [
+    { "nombre": "DIEGO GALVEZ",       "email": "d.galvez@visma.com" },
+    { "nombre": "CAROL MELENDEZ",     "email": "carol.melendez@visma.com" },
+    { "nombre": "HANS GALVEZ",        "email": "hans.galvez@visma.com" },
+    { "nombre": "IGNACIO DOMINGUEZ",  "email": "ignacio.dominguez@visma.com" },
+    { "nombre": "EUGE MEZA",          "email": "maria.meza@visma.com" },
+    { "nombre": "MARIO SIMONET",      "email": "mario.simonet@visma.com" },
+    { "nombre": "MURIEL VELASQUEZ",   "email": "muriel.velasquez@visma.com" },
+    { "nombre": "SEBASTIAN LEON",     "email": "sebastian.leon@visma.com" },
+    { "nombre": "GABRIEL MEZA",       "email": "gabriel.meza@visma.com" },
+    { "nombre": "YURISAY SILVA",      "email": "yurisay.silva@visma.com" },
+    { "nombre": "SANDRO CORNEJO",     "email": "sandro.cornejo@visma.com" },
+    { "nombre": "JAVIERA BRAVO",      "email": "javiera.bravo@visma.com" }
+  ]
+}
