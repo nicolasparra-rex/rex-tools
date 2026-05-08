@@ -51,6 +51,13 @@ st.markdown(f"""
     }}
     .step-num.done {{ background: {REX_CYAN}; color: white; }}
     .step-label {{ font-size: 12px; font-weight: 600; color: {REX_NAVY}; }}
+
+    /* Restaurar ancho Rex+ estándar */
+    .main .block-container {{
+        max-width: 1400px !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
