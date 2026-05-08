@@ -7,6 +7,7 @@ import json
 import datetime
 from pathlib import Path
 
+import sys as _sys
 import streamlit as st
 import pandas as pd
 
@@ -22,93 +23,20 @@ if _BASE_DIR.name == "pages":
 CLIENTES_PATH = _BASE_DIR / "clientes.json"
 EQUIPO_PATH   = _BASE_DIR / "equipo.json"
 
-st.set_page_config(
-    page_title="Acta de Implementación · REX+",
-    page_icon="📄",
-    layout="wide",
-)
+# ── Branding Rex+ estándar ───────────────────────────────────────────────────
+_sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    from lib.branding import aplicar_branding, aplicar_footer
+    aplicar_branding(titulo_pagina="Acta de Implementación", badge="PRODUCCION")
+except Exception:
+    pass
 
-# ── Paleta Rex+ Tools ────────────────────────────────────────────────────────
-REX_NAVY  = "#1a2744"
-REX_CYAN  = "#00c4cc"
-REX_LIGHT = "#f0fafb"
+# ── Colores para step-pills (CSS mínimo adicional) ───────────────────────────
+REX_NAVY  = "#1A3A5F"
+REX_CYAN  = "#1EBBEF"
 
 st.markdown(f"""
 <style>
-    /* Fondo general */
-    .stApp {{ background-color: #f8fafc; }}
-    .block-container {{ padding-top: 0 !important; max-width: 100% !important; }}
-
-    /* Ocultar header nativo de Streamlit */
-    header[data-testid="stHeader"] {{ display: none !important; }}
-
-    /* Barra superior personalizada */
-    .rex-header {{
-        background: linear-gradient(90deg, {REX_NAVY} 0%, #1e3460 100%);
-        padding: 0 2rem;
-        height: 56px;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        margin-bottom: 1.5rem;
-        position: sticky;
-        top: 0;
-        z-index: 999;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }}
-    .rex-logo {{
-        background: white;
-        color: {REX_NAVY};
-        font-weight: 800;
-        font-size: 13px;
-        padding: 5px 8px;
-        border-radius: 6px;
-        letter-spacing: 0.5px;
-    }}
-    .rex-divider {{
-        width: 1px; height: 28px;
-        background: rgba(255,255,255,0.25);
-    }}
-    .rex-title {{
-        color: white;
-        font-size: 15px;
-        font-weight: 600;
-        letter-spacing: 0.3px;
-        flex: 1;
-    }}
-    .rex-badge {{
-        background: {REX_CYAN};
-        color: {REX_NAVY};
-        font-size: 10px;
-        font-weight: 800;
-        padding: 3px 10px;
-        border-radius: 99px;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-    }}
-
-    /* Sidebar */
-    section[data-testid="stSidebar"] {{
-        background-color: {REX_NAVY} !important;
-    }}
-    section[data-testid="stSidebar"] * {{
-        color: rgba(255,255,255,0.75) !important;
-    }}
-    section[data-testid="stSidebar"] .st-emotion-cache-1cypcdb {{
-        background-color: {REX_CYAN} !important;
-        border-radius: 6px !important;
-    }}
-
-    /* Títulos */
-    h1 {{ display: none !important; }}
-    h2 {{
-        font-size: 1.05rem !important; color: {REX_NAVY} !important;
-        font-weight: 700 !important;
-        border-bottom: 2px solid {REX_CYAN};
-        padding-bottom: 5px; margin-top: 0.5rem !important;
-    }}
-
-    /* Pills de paso */
     .step-pill {{
         display: inline-flex; align-items: center; gap: 8px;
         background: white; border: 1px solid #dde3f0;
@@ -121,80 +49,12 @@ st.markdown(f"""
         align-items: center; justify-content: center;
         font-size: 11px; font-weight: 700; flex-shrink: 0;
     }}
-    .step-num.done {{ background: {REX_CYAN}; color: {REX_NAVY}; }}
+    .step-num.done {{ background: {REX_CYAN}; color: white; }}
     .step-label {{ font-size: 12px; font-weight: 600; color: {REX_NAVY}; }}
-
-    /* Labels */
-    label {{ color: #374151 !important; font-size: 0.82rem !important; font-weight: 500 !important; }}
-
-    /* Inputs focus */
-    input:focus, textarea:focus {{
-        border-color: {REX_CYAN} !important;
-        box-shadow: 0 0 0 2px rgba(0,196,204,0.2) !important;
-    }}
-
-    /* Botón primario */
-    div[data-testid="stButton"] > button[kind="primary"] {{
-        background: {REX_NAVY} !important; color: white !important;
-        border: none !important; border-radius: 20px !important;
-        font-weight: 600 !important;
-    }}
-    div[data-testid="stButton"] > button[kind="primary"]:hover {{
-        background: {REX_CYAN} !important; color: {REX_NAVY} !important;
-    }}
-
-    /* Botón secundario */
-    div[data-testid="stButton"] > button {{
-        background: white !important; color: {REX_NAVY} !important;
-        border: 1.5px solid {REX_NAVY} !important; border-radius: 20px !important;
-        font-weight: 500 !important;
-    }}
-    div[data-testid="stButton"] > button:hover {{
-        background: {REX_LIGHT} !important; border-color: {REX_CYAN} !important;
-        color: {REX_NAVY} !important;
-    }}
-
-    /* Botón descarga */
-    div[data-testid="stDownloadButton"] > button {{
-        background: {REX_CYAN} !important; color: {REX_NAVY} !important;
-        border: none !important; border-radius: 20px !important;
-        font-weight: 700 !important;
-    }}
-    div[data-testid="stDownloadButton"] > button:hover {{
-        opacity: 0.85 !important;
-    }}
-
-    /* Selectbox */
-    div[data-testid="stSelectbox"] > div > div {{
-        border-radius: 6px !important; background: white !important;
-    }}
-
-    /* Alertas */
-    div[data-testid="stAlert"] {{ border-radius: 8px !important; }}
-
-    /* File uploader — borde punteado cyan */
-    div[data-testid="stFileUploader"] {{
-        border: 2px dashed {REX_CYAN} !important;
-        border-radius: 10px !important;
-        background: {REX_LIGHT} !important;
-        padding: 8px !important;
-    }}
-
-    hr {{ border-color: #e2e8f0 !important; }}
-    div[data-testid="stDataEditor"] {{ border-radius: 8px !important; }}
 </style>
 """, unsafe_allow_html=True)
 
-# Barra superior
-LOGO_B64 = "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"
-st.markdown(f"""
-<div class="rex-header">
-    <img src="data:image/png;base64,{LOGO_B64}" style="height:32px;object-fit:contain;" alt="Rex+"/>
-    <span class="rex-divider"></span>
-    <span class="rex-title">Acta de Implementación</span>
-    <span class="rex-badge">IMPLEMENTACIÓN</span>
-</div>
-""", unsafe_allow_html=True)
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
