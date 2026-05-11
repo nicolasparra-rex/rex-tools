@@ -114,6 +114,43 @@ with col4:
     if st.button("Abrir Acta Implementación", key="btn_acta", use_container_width=True):
         st.switch_page("pages/4_Acta_Implementacion.py")
 
+st.markdown("")
+col5, col6 = st.columns(2)
+
+with col5:
+    st.markdown(
+        '<div class="rex-tool-card">'
+        '<div class="rex-tool-icon">📊</div>'
+        '<div class="rex-tool-title">Libro de Remuneraciones</div>'
+        '<div class="rex-tool-desc">'
+        'Transforma el CSV del Libro de Remuneraciones Electrónico al formato '
+        'de importación Rex+. Soporta múltiples archivos en formato RUTempresa_YYYYMM.csv.'
+        '</div>'
+        '<span class="rex-tool-tag activa">ACTIVA</span>'
+        '<span class="rex-tool-tag">CSV</span>'
+        '<span class="rex-tool-tag">LRE</span>'
+        '<br/><br/>'
+        '<span class="rex-tool-cta">Abrir herramienta →</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Abrir Libro Remuneraciones", key="btn_libro_rem", use_container_width=True):
+        st.switch_page("pages/5_Libro_Remuneraciones.py")
+
+with col6:
+    st.markdown(
+        '<div class="rex-tool-card" style="opacity:0.6;">'
+        '<div class="rex-tool-icon dark">⚙️</div>'
+        '<div class="rex-tool-title">Próximamente</div>'
+        '<div class="rex-tool-desc">'
+        'Espacio reservado para la próxima herramienta Rex+. '
+        'Si tienes una idea o necesitas automatizar algún proceso, ¡pídelo!'
+        '</div>'
+        '<span class="rex-tool-tag proximo">PRÓXIMAMENTE</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
 # ─────────────────────────────────────────────
 #  ESTADÍSTICAS RÁPIDAS
 # ─────────────────────────────────────────────
@@ -121,10 +158,10 @@ st.markdown("---")
 st.markdown("### Resumen")
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("🛠️ Herramientas", "4")
-m2.metric("✅ Activas", "4")
+m1.metric("🛠️ Herramientas", "5")
+m2.metric("✅ Activas", "5")
 m3.metric("🔜 En desarrollo", "0")
-m4.metric("📅 Versión", "1.2")
+m4.metric("📅 Versión", "1.3")
 
 aplicar_footer()
 
