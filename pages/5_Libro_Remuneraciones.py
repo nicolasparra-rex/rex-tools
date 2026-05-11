@@ -341,6 +341,80 @@ step_header(1, "Archivos de referencia del cliente", done=paso1_ok)
 
 with st.expander("👥 empleado.xlsx · 🏢 empresa.xlsx", expanded=not paso1_ok):
     st.caption("Estos archivos se usan solo en esta sesión y no se guardan en ningún servidor.")
+
+    # ── Instrucciones SQL ─────────────────────────────────────────────────────
+    with st.expander("📋 ¿Cómo generar estos archivos desde Rex+?", expanded=False):
+        st.markdown("""
+        Ejecuta cada consulta en Rex+ (Módulo de reportes / consulta directa),
+        exporta el resultado como **.xlsx** y súbelo aquí.
+        """)
+        st.markdown("**Consulta empleado.xlsx:**")
+        SQL_EMPLEADO = """select contr.empleado as "Id empleado",
+       contr.contrato as "Numero de contrato",
+       contr."fechaInic" as "fechaInic",
+       contr."tipoCont" as "tipoCont",
+       (select emp.jubilado from T$empleados as emp
+        where contr.empleado = emp.empleado) as "jubilado"
+from T$empleadoscontr as contr"""
+        st.code(SQL_EMPLEADO, language="sql")
+
+        st.markdown("**Consulta empresa.xlsx:**")
+        SQL_EMPRESA = """select identificador_nacional as "Rut empresa",
+       empresa as "idempresa",
+       mutual as "Mutual",
+       "cotizacionMutu" as "% mutual"
+from T$empresas"""
+        st.code(SQL_EMPRESA, language="sql")
+
+    # ── Archivos ejemplo ──────────────────────────────────────────────────────
+    import openpyxl, io as _io, datetime as _dt
+
+    def make_ejemplo_empleado():
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Hoja 1"
+        ws.append(["Id empleado", "Numero de contrato", "fechaInic", "tipoCont", "jubilado"])
+        ws.append(["12345678-9", 1, _dt.date(2020, 1, 15), "I", 0])
+        ws.append(["98765432-1", 1, _dt.date(2018, 6, 1),  "O", 0])
+        ws.append(["11111111-1", 2, _dt.date(2022, 3, 10), "F", 0])
+        buf = _io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf.read()
+
+    def make_ejemplo_empresa():
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Hoja 1"
+        ws.append(["Rut empresa", "idempresa", "Mutual", "% mutual"])
+        ws.append(["76016236-1", 1, "ACHS", 0.93])
+        ws.append(["12345678-0", 2, "IST",  0.85])
+        buf = _io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf.read()
+
+    col_ej1, col_ej2 = st.columns(2)
+    with col_ej1:
+        st.download_button(
+            "📥 Descargar ejemplo empleado.xlsx",
+            data=make_ejemplo_empleado(),
+            file_name="ejemplo_empleado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with col_ej2:
+        st.download_button(
+            "📥 Descargar ejemplo empresa.xlsx",
+            data=make_ejemplo_empresa(),
+            file_name="ejemplo_empresa.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    st.divider()
+
+    # ── Uploaders ─────────────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
     with col1:
         f_emp = st.file_uploader("👥 empleado.xlsx", type=["xlsx"], key="up_empleado")
