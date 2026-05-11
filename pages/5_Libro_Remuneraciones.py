@@ -1,4 +1,4 @@
-h"""
+"""
 Rex+ Tools - Libro de Remuneraciones Electrónico
 Transforma el CSV del LRE al formato de importación Rex+.
 """
@@ -467,11 +467,9 @@ if archivos:
 
 # ── Gestión de equivalencias ──────────────────────────────────────────────────
 try:
-        from equivalencias_manager import render_equivalencias_manager
+    from equivalencias_manager import render_equivalencias_manager
+    render_equivalencias_manager(EQUIVALENCIAS)
 except ModuleNotFoundError:
-        render_equivalencias_manager = None
+    pass
 
-aplicar_footer()try:
-        from equivalencias_manager import render_equivalencias_manager
-except ModuleNotFoundError:
-        render_equivalencias_manager = None
+aplicar_footer()
