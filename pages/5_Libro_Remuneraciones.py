@@ -313,7 +313,12 @@ def transformar(input_bytes, nombre, refs):
             "DiferenciasAFC": dif_afc,
         })
 
-    return pd.DataFrame(filas).sort_values("Id empleado").reset_index(drop=True), rut_empresa, periodo
+    df_out = pd.DataFrame(filas)
+    # Quitar cero inicial de RUTs — Rex+ no acepta formato 05829866-2
+    df_out["Id empleado"] = df_out["Id empleado"].apply(
+        lambda r: r.lstrip("0") if isinstance(r, str) and r.startswith("0") else r
+    )
+    return df_out.sort_values("Id empleado").reset_index(drop=True), rut_empresa, periodo
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -321,8 +326,9 @@ def transformar(input_bytes, nombre, refs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def step_header(num, label, done=False):
-    bg = "#1EBBEF" if done else "#1A3A5F"
-    icon = f"{num} ✓" if done else str(num)
+    bg      = "#1EBBEF" if done else "#1A3A5F"
+    icon    = "✓" if done else str(num)
+    suffix  = " ✓" if done else ""
     st.markdown(f"""
     <div style="display:inline-flex;align-items:center;gap:8px;
                 background:white;border:1px solid #dde3f0;border-radius:99px;
@@ -331,8 +337,8 @@ def step_header(num, label, done=False):
         <span style="background:{bg};color:white;border-radius:50%;
                      width:22px;height:22px;display:inline-flex;
                      align-items:center;justify-content:center;
-                     font-size:11px;font-weight:700;">{icon}</span>
-        <span style="font-size:13px;font-weight:600;color:#1A3A5F;">{label}</span>
+                     font-size:11px;font-weight:700;">{num}</span>
+        <span style="font-size:13px;font-weight:600;color:#1A3A5F;">{label}{suffix}</span>
     </div>""", unsafe_allow_html=True)
 
 # ── PASO 1: Archivos de referencia del cliente ────────────────────────────────
