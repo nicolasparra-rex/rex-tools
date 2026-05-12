@@ -313,7 +313,12 @@ def transformar(input_bytes, nombre, refs):
             "DiferenciasAFC": dif_afc,
         })
 
-    return pd.DataFrame(filas).sort_values("Id empleado").reset_index(drop=True), rut_empresa, periodo
+    df_out = pd.DataFrame(filas)
+    # Quitar cero inicial de RUTs — Rex+ no acepta formato 05829866-2
+    df_out["Id empleado"] = df_out["Id empleado"].apply(
+        lambda r: r.lstrip("0") if isinstance(r, str) and r.startswith("0") else r
+    )
+    return df_out.sort_values("Id empleado").reset_index(drop=True), rut_empresa, periodo
 
 
 # ══════════════════════════════════════════════════════════════════════════════
