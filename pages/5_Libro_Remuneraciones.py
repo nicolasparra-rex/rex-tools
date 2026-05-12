@@ -19,14 +19,14 @@ sys.path.insert(0, str(_ROOT / "lib"))
 from lib.branding import aplicar_branding, aplicar_footer, hero
 
 st.set_page_config(
-    page_title="Libro de Remuneraciones | Rex+ Tools",
+    page_title="Migración Historia LRE | Rex+ Tools",
     page_icon="📊",
     layout="wide",
 )
 
 aplicar_branding(titulo_pagina="Libro de Remuneraciones")
 hero(
-    titulo="Libro de Remuneraciones Electrónico",
+    titulo="Migración Historia mediante LRE",
     descripcion="Transforma el CSV del LRE al formato de importación Rex+. Carga los archivos de referencia y el CSV para comenzar.",
     icono="📊",
 )
@@ -414,6 +414,13 @@ from T$empresas"""
 
     st.divider()
 
+    # ── Advertencia ───────────────────────────────────────────────────────────
+    st.warning(
+        "⚠️ **Importante:** Antes de subir los archivos, asegúrate de **eliminar la primera fila** "
+        "de `empleado.xlsx` y `empresa.xlsx`. Esa fila contiene el nombre de la consulta y "
+        "no debe incluirse en los datos."
+    )
+
     # ── Uploaders ─────────────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
     with col1:
@@ -443,7 +450,7 @@ equiv_ok = st.session_state.equiv_override or EQUIVALENCIAS_BASE.exists()
 step_header(2, "Equivalencias", done=equiv_ok)
 
 with st.expander("⚙️ Gestión de equivalencias", expanded=not equiv_ok):
-    tab1, tab2, tab3 = st.tabs(["📥 Descargar base", "📤 Usar actualizada", "💾 Proponer cambio al repo"])
+    tab1, tab2, tab3 = st.tabs(["📥 Descargar base", "📤 Usar actualizada", "💾 Actualizar archivo equivalencia (admin)"])
 
     with tab1:
         if EQUIVALENCIAS_BASE.exists():
