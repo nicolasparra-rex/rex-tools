@@ -322,7 +322,7 @@ def transformar(input_bytes, nombre, refs):
 
 def step_header(num, label, done=False):
     bg = "#1EBBEF" if done else "#1A3A5F"
-    icon = "✓" if done else str(num)
+    icon = f"{num} ✓" if done else str(num)
     st.markdown(f"""
     <div style="display:inline-flex;align-items:center;gap:8px;
                 background:white;border:1px solid #dde3f0;border-radius:99px;
