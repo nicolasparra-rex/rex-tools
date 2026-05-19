@@ -75,6 +75,15 @@ campos_email    = ["Email institucional", "Email personal"]
 
 estados_civiles_validos = ["S", "C", "V", "D", "U"]
 
+# Mapeo de textos a códigos de tipo de contrato
+TIPO_CONTRATO_MAPEO = {
+    "F": "F", "PLAZO FIJO": "F", "A PLAZO FIJO": "F", "FIJO": "F",
+    "I": "I", "INDEFINIDO": "I", "A INDEFINIDO": "I",
+    "O": "O", "POR OBRA": "O", "POR OBRA O FAENA": "O", "OBRA O FAENA": "O", "OBRA": "O", "FAENA": "O",
+    "E": "E", "APRENDIZAJE": "E", "DE APRENDIZAJE": "E", "CONTRATO DE APRENDIZAJE": "E",
+    "H": "H", "HONORARIOS": "H",
+}
+
 # Mapeo de textos a códigos de estado civil
 ESTADO_CIVIL_MAPEO = {
     "S": "S", "SOLTERO": "S", "SOLTERA": "S", "SOLTERO/A": "S",
@@ -594,6 +603,7 @@ def procesar_archivo(uploaded_file):
         "afp_normalizadas":          0,
         "salud_normalizadas":        0,
         "estados_civiles_normalizados": 0,
+        "tipos_contrato_normalizados": 0,
     }
 
     # Lista de correcciones de ubicación hechas (para el reporte)
@@ -633,6 +643,17 @@ def procesar_archivo(uploaded_file):
         df["Comuna"] = resultados.apply(lambda r: r[0])
         correcciones["comunas_rellenadas"] = int((antes.fillna("") != df["Comuna"].fillna("")).sum())
 
+    # ───── Tipo de contrato: normalizar texto a código ─────
+    if "Tipo del contrato" in df.columns:
+        antes = df["Tipo del contrato"].copy()
+        def _normalizar_tipo_contrato(valor):
+            if pd.isna(valor) or str(valor).strip() == "":
+                return valor
+            clave = str(valor).strip().upper()
+            return TIPO_CONTRATO_MAPEO.get(clave, valor)
+        df["Tipo del contrato"] = df["Tipo del contrato"].apply(_normalizar_tipo_contrato)
+        correcciones["tipos_contrato_normalizados"] = int((antes.fillna("") != df["Tipo del contrato"].fillna("")).sum())
+
     # ───── Estado civil: normalizar texto a código ─────
     if "Estado civil" in df.columns:
         antes = df["Estado civil"].copy()
@@ -652,15 +673,17 @@ def procesar_archivo(uploaded_file):
         correcciones["afp_normalizadas"] = int((antes.fillna("") != df["Id AFP"].fillna("")).sum())
 
     # ───── Salud: normalizar a ID oficial ─────
-    if "ID INSTITUCION DE SALUD" in df.columns:
-        antes = df["ID INSTITUCION DE SALUD"].copy()
-        resultados = df["ID INSTITUCION DE SALUD"].apply(resolver_salud)
-        df["ID INSTITUCION DE SALUD"] = resultados.apply(lambda r: r[0])
+    col_salud = next((c for c in df.columns if c.strip().upper().replace("Ó","O").replace("Ú","U") 
+                      in ["ID INSTITUCION DE SALUD", "ID INSTITUCIÓN DE SALUD"]), None)
+    if col_salud:
+        antes = df[col_salud].copy()
+        resultados = df[col_salud].apply(resolver_salud)
+        df[col_salud] = resultados.apply(lambda r: r[0])
         # Convertir a minúscula
-        df["ID INSTITUCION DE SALUD"] = df["ID INSTITUCION DE SALUD"].apply(
+        df[col_salud] = df[col_salud].apply(
             lambda v: str(v).strip().lower() if pd.notna(v) and str(v).strip() != "" else v
         )
-        correcciones["salud_normalizadas"] = int((antes.fillna("") != df["ID INSTITUCION DE SALUD"].fillna("")).sum())
+        correcciones["salud_normalizadas"] = int((antes.fillna("") != df[col_salud].fillna("")).sum())
 
     # ───── Emails ─────
     for campo in campos_email:
