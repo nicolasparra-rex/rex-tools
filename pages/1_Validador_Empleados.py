@@ -75,6 +75,16 @@ campos_email    = ["Email institucional", "Email personal"]
 
 estados_civiles_validos = ["S", "C", "V", "D", "U"]
 
+# Mapeo de textos a códigos de estado civil
+ESTADO_CIVIL_MAPEO = {
+    "S": "S", "SOLTERO": "S", "SOLTERA": "S", "SOLTERO/A": "S",
+    "C": "C", "CASADO": "C", "CASADA": "C", "CASADO/A": "C",
+    "V": "V", "VIUDO": "V", "VIUDA": "V", "VIUDO/A": "V",
+    "D": "D", "DIVORCIADO": "D", "DIVORCIADA": "D", "DIVORCIADO/A": "D",
+    "U": "U", "CONVIVIENTE": "U", "CONVIVIENTE CIVIL": "U",
+    "UNION CIVIL": "U", "UNION CIVIL": "U",
+}
+
 formatos_posibles = [
     "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d",
     "%Y/%m/%d", "%d-%m-%y", "%d/%m/%y", "%m/%d/%Y",
@@ -583,6 +593,7 @@ def procesar_archivo(uploaded_file):
         "caracteres_reparados":      int(mojibake_reparados),
         "afp_normalizadas":          0,
         "salud_normalizadas":        0,
+        "estados_civiles_normalizados": 0,
     }
 
     # Lista de correcciones de ubicación hechas (para el reporte)
@@ -622,6 +633,17 @@ def procesar_archivo(uploaded_file):
         df["Comuna"] = resultados.apply(lambda r: r[0])
         correcciones["comunas_rellenadas"] = int((antes.fillna("") != df["Comuna"].fillna("")).sum())
 
+    # ───── Estado civil: normalizar texto a código ─────
+    if "Estado civil" in df.columns:
+        antes = df["Estado civil"].copy()
+        def _normalizar_estado_civil(valor):
+            if pd.isna(valor) or str(valor).strip() == "":
+                return valor
+            clave = str(valor).strip().upper()
+            return ESTADO_CIVIL_MAPEO.get(clave, valor)
+        df["Estado civil"] = df["Estado civil"].apply(_normalizar_estado_civil)
+        correcciones["estados_civiles_normalizados"] = int((antes.fillna("") != df["Estado civil"].fillna("")).sum())
+
     # ───── AFP: normalizar a ID oficial ─────
     if "Id AFP" in df.columns:
         antes = df["Id AFP"].copy()
@@ -634,6 +656,10 @@ def procesar_archivo(uploaded_file):
         antes = df["ID INSTITUCION DE SALUD"].copy()
         resultados = df["ID INSTITUCION DE SALUD"].apply(resolver_salud)
         df["ID INSTITUCION DE SALUD"] = resultados.apply(lambda r: r[0])
+        # Convertir a minúscula
+        df["ID INSTITUCION DE SALUD"] = df["ID INSTITUCION DE SALUD"].apply(
+            lambda v: str(v).strip().lower() if pd.notna(v) and str(v).strip() != "" else v
+        )
         correcciones["salud_normalizadas"] = int((antes.fillna("") != df["ID INSTITUCION DE SALUD"].fillna("")).sum())
 
     # ───── Emails ─────
