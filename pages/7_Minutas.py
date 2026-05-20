@@ -132,6 +132,7 @@ def build_remuneraciones(ws, d):
         ("Provisión Vacaciones", d["provision"]),
         ("Centralización Contable", d["centralizacion"]),
         ("Transferencia Bancaria", d["transferencia"]),
+        ("¿Utiliza API?", d["usa_api"]),
     ]
     for i, (l, v) in enumerate(cfg):
         _set_row(ws, 17+i, l, v, even=(i%2==1))
@@ -242,8 +243,17 @@ with tab_rem:
                                      "D365", "otro", "no aplica"], key="r_central")
     if centralizacion_r == "otro":
         centralizacion_r = c4.text_input("¿Cuál sistema contable?", placeholder="Escribe el sistema...", key="r_central_otro")
-    transferencia_r  = c4.text_input("Transferencia Bancaria",
-                                     placeholder="Ej: banco chile y banco estado", key="r_transfer")
+    BANCOS = [
+        "Banco BCI", "Banco BICE", "Banco Consorcio", "Banco Coopeuch",
+        "Banco de Chile", "Banco del Estado de Chile", "Banco Edwards",
+        "Banco Falabella", "Banco Internacional", "Banco ITAU", "Banco Ripley",
+        "Banco Santander Chile", "Banco Security", "BBVA", "Citibank",
+        "Corpbanca", "Global 66", "HSBC Bank Chile", "Mach", "Mercado Pago",
+        "Prex Chile", "Scotiabank", "Tenpo", "Los Heroes", "Sin Banco",
+    ]
+    bancos_sel = st.multiselect("Transferencia Bancaria", BANCOS, key="r_transfer")
+    transferencia_r = ", ".join(bancos_sel) if bancos_sel else ""
+    usa_api_r = c4.selectbox("¿Utiliza API?", ["no", "si"], key="r_api")
 
     st.divider()
     st.subheader("Comentarios Generales")
@@ -312,7 +322,7 @@ if st.button("📥 Generar y Descargar Excel", type="primary", use_container_wid
         "comision": comision_r, "reliquidacion": reliquidacion_r,
         "tres_dias": tres_dias_r, "zona_extrema": zona_extrema_r,
         "provision": provision_r, "centralizacion": centralizacion_r,
-        "transferencia": transferencia_r, "observaciones": observaciones_r,
+        "transferencia": transferencia_r, "usa_api": usa_api_r, "observaciones": observaciones_r,
     }
     data_asi = {
         "empresa": empresa_a, "rut": rut_a, "direccion": direccion_a,
