@@ -218,7 +218,10 @@ with tab_rem:
     direccion_r     = c2.text_input("Jefe de Proyecto / Dirección", placeholder="Ej: Av. Principal 123", key="r_direccion")
     correo_r        = c2.text_input("Correo de Contacto", placeholder="correo@empresa.cl", key="r_correo")
     telefono_r      = c2.text_input("Número de Contacto", placeholder="Ej: 56912345678", key="r_telefono")
-    plan_r          = c2.selectbox("Plan Contratado", ["estandar", "premium", "basico", "otro"], key="r_plan")
+    plan_r          = c2.selectbox("Plan Contratado",
+                                   ["Express (0-100 colab)", "Base (101-200 colab)",
+                                    "Estandar (201-800 colab)", "Full (801-3000 colab)",
+                                    "Mega Full (3001+)"], key="r_plan")
     col_r, col_rs   = st.columns(2)
     colaboradores_r = col_r.number_input("Cantidad de Colaboradores", min_value=1, value=1, step=1, key="r_colab")
     razones_r       = col_rs.number_input("Cantidad de Razones Sociales", min_value=1, value=1, step=1, key="r_razones")
@@ -234,7 +237,11 @@ with tab_rem:
     zona_extrema_r   = c4.selectbox("Zona Extrema", SI_NO2, key="r_zona")
     provision_r      = c4.selectbox("Provisión Vacaciones", SI_NO2, key="r_provision")
     centralizacion_r = c4.selectbox("Centralización Contable",
-                                    ["defontana", "sap", "oracle", "otro sistema", "no aplica"], key="r_central")
+                                    ["Manager+", "Manager Time", "SAP R3", "SAP B1", "SAP RA3",
+                                     "Softland", "Defontana", "Laudus", "Chipax", "Oracle",
+                                     "D365", "otro", "no aplica"], key="r_central")
+    if centralizacion_r == "otro":
+        centralizacion_r = c4.text_input("¿Cuál sistema contable?", placeholder="Escribe el sistema...", key="r_central_otro")
     transferencia_r  = c4.text_input("Transferencia Bancaria",
                                      placeholder="Ej: banco chile y banco estado", key="r_transfer")
 
