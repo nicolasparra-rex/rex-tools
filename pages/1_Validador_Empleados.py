@@ -75,6 +75,15 @@ campos_email    = ["Email institucional", "Email personal"]
 
 estados_civiles_validos = ["S", "C", "V", "D", "U"]
 
+# Mapeo de textos a códigos de moneda cotización
+MONEDA_COTIZACION_MAPEO = {
+    "U": "U", "UF": "U", "UNIDAD DE FOMENTO": "U",
+    "P": "P", "PESOS": "P", "PESO": "P", "CLP": "P",
+    "%": "%", "7%": "%", "7 %": "%",
+    "F": "F", "7% + UF": "F", "7% +UF": "F", "7%+UF": "F", "7 % + UF": "F",
+    "Z": "Z", "7% + UF + PESOS": "Z", "7%+UF+PESOS": "Z", "7% + UF + PESO": "Z",
+}
+
 # Mapeo de textos a códigos de tipo de contrato
 TIPO_CONTRATO_MAPEO = {
     "F": "F", "PLAZO FIJO": "F", "A PLAZO FIJO": "F", "FIJO": "F",
@@ -604,6 +613,7 @@ def procesar_archivo(uploaded_file):
         "salud_normalizadas":        0,
         "estados_civiles_normalizados": 0,
         "tipos_contrato_normalizados": 0,
+        "monedas_normalizadas": 0,
     }
 
     # Lista de correcciones de ubicación hechas (para el reporte)
@@ -642,6 +652,17 @@ def procesar_archivo(uploaded_file):
         resultados = df["Comuna"].apply(resolver_comuna)
         df["Comuna"] = resultados.apply(lambda r: r[0])
         correcciones["comunas_rellenadas"] = int((antes.fillna("") != df["Comuna"].fillna("")).sum())
+
+    # ───── Moneda cotización: normalizar texto a código ─────
+    if "Moneda de la cotización" in df.columns:
+        antes = df["Moneda de la cotización"].copy()
+        def _normalizar_moneda_cotizacion(valor):
+            if pd.isna(valor) or str(valor).strip() == "":
+                return valor
+            clave = str(valor).strip().upper()
+            return MONEDA_COTIZACION_MAPEO.get(clave, valor)
+        df["Moneda de la cotización"] = df["Moneda de la cotización"].apply(_normalizar_moneda_cotizacion)
+        correcciones["monedas_normalizadas"] = int((antes.fillna("") != df["Moneda de la cotización"].fillna("")).sum())
 
     # ───── Tipo de contrato: normalizar texto a código ─────
     if "Tipo del contrato" in df.columns:
