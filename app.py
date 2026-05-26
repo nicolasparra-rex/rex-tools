@@ -139,17 +139,24 @@ with col5:
 
 with col6:
     st.markdown(
-        '<div class="rex-tool-card" style="opacity:0.6;">'
-        '<div class="rex-tool-icon dark">⚙️</div>'
-        '<div class="rex-tool-title">Próximamente</div>'
+        '<div class="rex-tool-card">'
+        '<div class="rex-tool-icon lime">📋</div>'
+        '<div class="rex-tool-title">Minutas de Implementación</div>'
         '<div class="rex-tool-desc">'
-        'Espacio reservado para la próxima herramienta Rex+. '
-        'Si tienes una idea o necesitas automatizar algún proceso, ¡pídelo!'
+        'Completa los datos del cliente y descarga la minuta en Excel lista para entregar. '
+        'Incluye hojas de Remuneraciones y Asistencia con formato oficial.'
         '</div>'
-        '<span class="rex-tool-tag proximo">PRÓXIMAMENTE</span>'
+        '<span class="rex-tool-tag activa">ACTIVA</span>'
+        '<span class="rex-tool-tag">Excel</span>'
+        '<span class="rex-tool-tag">Remuneraciones</span>'
+        '<span class="rex-tool-tag">Asistencia</span>'
+        '<br/><br/>'
+        '<span class="rex-tool-cta">Abrir herramienta →</span>'
         '</div>',
         unsafe_allow_html=True,
     )
+    if st.button("Abrir Minutas", key="btn_minutas", use_container_width=True):
+        st.switch_page("pages/7_Minutas.py")
 
 # ─────────────────────────────────────────────
 #  ESTADÍSTICAS RÁPIDAS
@@ -158,10 +165,10 @@ st.markdown("---")
 st.markdown("### Resumen")
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("🛠️ Herramientas", "5")
-m2.metric("✅ Activas", "5")
+m1.metric("🛠️ Herramientas", "6")
+m2.metric("✅ Activas", "6")
 m3.metric("🔜 En desarrollo", "0")
-m4.metric("📅 Versión", "1.3")
+m4.metric("📅 Versión", "1.4")
 
 aplicar_footer()
 
