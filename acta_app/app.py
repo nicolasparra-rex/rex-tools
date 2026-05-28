@@ -99,11 +99,11 @@ def save_equipo(data: dict):
     with open(EQUIPO_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def add_equipo_member(rol: str, nombre: str, email: str):
+def add_equipo_member(rol: str, nombre: str, email: str, telefono: str = ""):
     data = load_equipo()
     lista = data[rol]
     if not any(m["nombre"].lower() == nombre.lower() for m in lista):
-        lista.append({"nombre": nombre, "email": email})
+        lista.append({"nombre": nombre, "email": email, "telefono": telefono})
         save_equipo(data)
 
 def delete_equipo_member(rol: str, nombre: str):
@@ -131,8 +131,6 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── Header ya renderizado via HTML ───────────────────────────────────────────
-
 # ── Layout: columna izquierda (formulario) | columna derecha (notas + generar)
 col_form, col_right = st.columns([3, 2], gap="large")
 
@@ -156,7 +154,6 @@ with col_form:
             "Cliente guardado",
             options, index=0, label_visibility="collapsed",
         )
-    # Resetear edit_mode si cambió el cliente seleccionado
     if selected != st.session_state.last_selected:
         st.session_state.edit_mode = False
         st.session_state.last_selected = selected
@@ -176,12 +173,10 @@ with col_form:
 
     client = next((c for c in client_list if c["nombre_display"] == selected), None)
 
-    # Modo lectura vs edición
     is_new    = selected == "— Nuevo cliente —"
     editable  = is_new or st.session_state.edit_mode
 
     if client and not editable:
-        # ── Vista solo lectura ────────────────────────────────────────────────
         st.info("🔒 Datos del cliente — haz clic en **🔓 Editar** para modificar")
 
     st.divider()
@@ -202,18 +197,44 @@ with col_form:
         placeholder="Nombre completo en mayúsculas",
         disabled=not editable,
     )
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        email_jefe_cliente = st.text_input(
+            "Email jefe cliente",
+            value=client.get("email_jefe_cliente", "") if client else "",
+            placeholder="nombre@empresa.cl",
+            disabled=not editable,
+        )
+    with col2:
+        tel_jefe_cliente = st.text_input(
+            "Teléfono jefe cliente",
+            value=client.get("tel_jefe_cliente", "") if client else "",
+            placeholder="+56 9 XXXX XXXX",
+            disabled=not editable,
+        )
+    with col3:
+        pass
+
+    st.markdown("**Usuario implementador**")
+    col1, col2, col3 = st.columns(3)
     with col1:
         usuario_impl = st.text_input(
-            "Usuario implementador *",
+            "Nombre *",
             value=client["usuario_impl"] if client else "",
             disabled=not editable,
         )
     with col2:
         email_impl = st.text_input(
-            "Email implementador",
+            "Email",
             value=client["email_impl"] if client else "",
             placeholder="nombre@empresa.cl",
+            disabled=not editable,
+        )
+    with col3:
+        tel_usuario_impl = st.text_input(
+            "Teléfono",
+            value=client.get("tel_usuario_impl", "") if client else "",
+            placeholder="+56 9 XXXX XXXX",
             disabled=not editable,
         )
 
@@ -224,60 +245,67 @@ with col_form:
     st.markdown("## Equipo REX+")
 
     equipo = load_equipo()
-    jefes_list     = equipo.get("jefes", [])
+    jefes_list       = equipo.get("jefes", [])
     consultores_list = equipo.get("consultores", [])
 
-    jefes_nombres     = [m["nombre"] for m in jefes_list]
+    jefes_nombres       = [m["nombre"] for m in jefes_list]
     consultores_nombres = [m["nombre"] for m in consultores_list]
 
     col1, col2 = st.columns(2)
     with col1:
-        jefe_opts = ["— Nuevo —"] + jefes_nombres
+        jefe_opts    = ["— Nuevo —"] + jefes_nombres
         jefe_default = client["jefe_rex"] if client else (jefes_nombres[0] if jefes_nombres else "— Nuevo —")
-        jefe_idx = jefe_opts.index(jefe_default) if jefe_default in jefe_opts else 0
-        jefe_sel = st.selectbox("Jefe de proyecto REX+", jefe_opts, index=jefe_idx)
+        jefe_idx     = jefe_opts.index(jefe_default) if jefe_default in jefe_opts else 0
+        jefe_sel     = st.selectbox("Jefe de proyecto REX+", jefe_opts, index=jefe_idx)
         if jefe_sel == "— Nuevo —":
-            jefe_rex = st.text_input("Nombre jefe *", placeholder="NOMBRE APELLIDO")
+            jefe_rex       = st.text_input("Nombre jefe *", placeholder="NOMBRE APELLIDO")
             email_jefe_rex = st.text_input("Email jefe", placeholder="nombre@visma.com")
+            tel_jefe_rex   = st.text_input("Teléfono jefe", placeholder="+56 9 XXXX XXXX")
         else:
-            jefe_data = next(m for m in jefes_list if m["nombre"] == jefe_sel)
-            jefe_rex = jefe_sel
+            jefe_data      = next(m for m in jefes_list if m["nombre"] == jefe_sel)
+            jefe_rex       = jefe_sel
             email_jefe_rex = st.text_input("Email jefe", value=jefe_data["email"])
+            tel_jefe_rex   = st.text_input("Teléfono jefe",
+                                           value=jefe_data.get("telefono", ""),
+                                           placeholder="+56 9 XXXX XXXX")
 
     with col2:
-        cons_opts = ["— Nuevo —"] + consultores_nombres
+        cons_opts    = ["— Nuevo —"] + consultores_nombres
         cons_default = client["consultor"] if client else (consultores_nombres[0] if consultores_nombres else "— Nuevo —")
-        cons_idx = cons_opts.index(cons_default) if cons_default in cons_opts else 0
-        cons_sel = st.selectbox("Consultor REX", cons_opts, index=cons_idx)
+        cons_idx     = cons_opts.index(cons_default) if cons_default in cons_opts else 0
+        cons_sel     = st.selectbox("Consultor REX", cons_opts, index=cons_idx)
         if cons_sel == "— Nuevo —":
-            consultor = st.text_input("Nombre consultor *", placeholder="NOMBRE APELLIDO")
+            consultor       = st.text_input("Nombre consultor *", placeholder="NOMBRE APELLIDO")
             email_consultor = st.text_input("Email consultor", placeholder="nombre@visma.com")
+            tel_consultor   = st.text_input("Teléfono consultor", placeholder="+56 9 XXXX XXXX")
         else:
-            cons_data = next(m for m in consultores_list if m["nombre"] == cons_sel)
-            consultor = cons_sel
+            cons_data       = next(m for m in consultores_list if m["nombre"] == cons_sel)
+            consultor       = cons_sel
             email_consultor = st.text_input("Email consultor", value=cons_data["email"], key="email_cons")
+            tel_consultor   = st.text_input("Teléfono consultor",
+                                            value=cons_data.get("telefono", ""),
+                                            placeholder="+56 9 XXXX XXXX",
+                                            key="tel_cons")
 
         horas = st.number_input(
             "Horas de sesión", min_value=1, max_value=8,
             value=int(client["horas"]) if client else 4,
         )
 
-    # Guardar nuevos miembros del equipo
     col_gj, col_gc = st.columns(2)
     with col_gj:
         if jefe_sel == "— Nuevo —" and jefe_rex:
             if st.button("💾 Guardar jefe", use_container_width=True):
-                add_equipo_member("jefes", jefe_rex, email_jefe_rex)
+                add_equipo_member("jefes", jefe_rex, email_jefe_rex, tel_jefe_rex)
                 st.success(f"✓ Jefe '{jefe_rex}' guardado.")
                 st.rerun()
     with col_gc:
         if cons_sel == "— Nuevo —" and consultor:
             if st.button("💾 Guardar consultor", use_container_width=True):
-                add_equipo_member("consultores", consultor, email_consultor)
+                add_equipo_member("consultores", consultor, email_consultor, tel_consultor)
                 st.success(f"✓ Consultor '{consultor}' guardado.")
                 st.rerun()
 
-    # Gestión del equipo guardado
     with st.expander("🗑 Gestionar equipo guardado"):
         col_ej, col_ec = st.columns(2)
         with col_ej:
@@ -343,26 +371,38 @@ with col_form:
 
     # ── Guardar / actualizar cliente ──────────────────────────────────────────
     st.divider()
+
+    def client_payload(nombre_display="", keyword_drive=""):
+        return {
+            "nombre_display":     nombre_display or empresa[:20],
+            "empresa":            empresa,
+            "plan":               plan,
+            "jefe_cliente":       jefe_cliente,
+            "email_jefe_cliente": email_jefe_cliente,
+            "tel_jefe_cliente":   tel_jefe_cliente,
+            "usuario_impl":       usuario_impl,
+            "email_impl":         email_impl,
+            "tel_usuario_impl":   tel_usuario_impl,
+            "jefe_rex":           jefe_rex,
+            "email_jefe_rex":     email_jefe_rex,
+            "consultor":          consultor,
+            "horas":              int(horas),
+            "keyword_drive":      keyword_drive,
+        }
+
     if is_new:
         with st.expander("💾 Guardar nuevo cliente"):
             nombre_display = st.text_input(
-                "Nombre corto del cliente",
-                value="",
-                placeholder="Ej: CYGNUS",
+                "Nombre corto del cliente", value="", placeholder="Ej: CYGNUS",
             )
             if st.button("Guardar cliente", use_container_width=True, type="primary"):
                 if not empresa:
                     st.error("Ingresa el nombre de la empresa.")
                 else:
-                    save_client({
-                        "nombre_display": nombre_display or empresa[:20],
-                        "empresa": empresa, "plan": plan,
-                        "jefe_cliente": jefe_cliente,
-                        "usuario_impl": usuario_impl, "email_impl": email_impl,
-                        "jefe_rex": jefe_rex, "email_jefe_rex": email_jefe_rex,
-                        "consultor": consultor, "horas": int(horas),
-                        "keyword_drive": nombre_display.lower() if nombre_display else "",
-                    })
+                    save_client(client_payload(
+                        nombre_display,
+                        nombre_display.lower() if nombre_display else "",
+                    ))
                     st.success(f"✓ Cliente '{nombre_display}' guardado.")
                     st.session_state.edit_mode = False
                     st.rerun()
@@ -371,15 +411,10 @@ with col_form:
             if not empresa:
                 st.error("Ingresa el nombre de la empresa.")
             else:
-                save_client({
-                    "nombre_display": client["nombre_display"],
-                    "empresa": empresa, "plan": plan,
-                    "jefe_cliente": jefe_cliente,
-                    "usuario_impl": usuario_impl, "email_impl": email_impl,
-                    "jefe_rex": jefe_rex, "email_jefe_rex": email_jefe_rex,
-                    "consultor": consultor, "horas": int(horas),
-                    "keyword_drive": client.get("keyword_drive", ""),
-                })
+                save_client(client_payload(
+                    client["nombre_display"],
+                    client.get("keyword_drive", ""),
+                ))
                 st.success(f"✓ Cambios guardados para **{client['nombre_display']}**.")
                 st.session_state.edit_mode = False
                 st.rerun()
@@ -402,7 +437,6 @@ with col_right:
         def search_gemini_notes(k): return []
         def download_docx(i): return None
 
-    # ── Modo: Drive o upload manual ──────────────────────────────────────────
     drive_ok = is_configured()
     modo = st.radio(
         "Fuente",
@@ -418,7 +452,6 @@ with col_right:
         else:
             keyword = client["keyword_drive"] if client else ""
             if not keyword and empresa:
-                # Extraer keyword del nombre de empresa
                 keyword = empresa.split("(")[-1].replace(")","").strip().lower() if "(" in empresa else empresa.split("-")[-1].strip().lower()
 
             col_kw, col_btn = st.columns([3,1])
@@ -499,13 +532,22 @@ with col_right:
             with st.spinner("Generando acta..."):
                 try:
                     header = {
-                        "empresa": empresa, "plan": plan,
-                        "acta_num": acta_num or fecha_str,
-                        "fecha": fecha_str,
-                        "jefe_cliente": jefe_cliente,
-                        "usuario_impl": usuario_impl, "email_impl": email_impl,
-                        "jefe_rex": jefe_rex, "email_jefe_rex": email_jefe_rex,
-                        "consultor": consultor,
+                        "empresa":            empresa,
+                        "plan":               plan,
+                        "acta_num":           acta_num or fecha_str,
+                        "fecha":              fecha_str,
+                        "jefe_cliente":       jefe_cliente,
+                        "email_jefe_cliente": email_jefe_cliente,
+                        "tel_jefe_cliente":   tel_jefe_cliente,
+                        "usuario_impl":       usuario_impl,
+                        "email_impl":         email_impl,
+                        "tel_usuario_impl":   tel_usuario_impl,
+                        "jefe_rex":           jefe_rex,
+                        "email_jefe_rex":     email_jefe_rex,
+                        "tel_jefe_rex":       tel_jefe_rex,
+                        "consultor":          consultor,
+                        "email_consultor":    email_consultor,
+                        "tel_consultor":      tel_consultor,
                     }
                     asistentes_list = [
                         {"nombre": row["nombre"], "cargo": row.get("cargo",""), "gerencia": row.get("gerencia","")}
