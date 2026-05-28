@@ -142,7 +142,6 @@ def bullet_para(text: str, para_id: str) -> str:
 
 
 def asistente_row(nombre: str, cargo: str = "", gerencia: str = "", num: int = 1) -> str:
-    """Genera una fila de la tabla de asistentes."""
     rpr = (
         '<w:rFonts w:ascii="Calibri" w:eastAsia="Times New Roman" w:hAnsi="Calibri" w:cs="Calibri"/>'
         '<w:color w:val="003287"/><w:sz w:val="18"/><w:szCs w:val="18"/>'
@@ -177,8 +176,10 @@ def generate_acta(
     """
     Genera el acta .docx y retorna los bytes.
 
-    header: {empresa, plan, acta_num, fecha, jefe_cliente, usuario_impl,
-             email_impl, jefe_rex, email_jefe_rex, consultor}
+    header: {empresa, plan, acta_num, fecha, jefe_cliente, email_jefe_cliente,
+             tel_jefe_cliente, usuario_impl, email_impl, tel_usuario_impl,
+             jefe_rex, email_jefe_rex, tel_jefe_rex,
+             consultor, email_consultor, tel_consultor}
     asistentes: [{"nombre": ..., "cargo": ..., "gerencia": ...}]
     dev_points: lista de strings (bullets del desarrollo)
     activities: lista de (nombre, R, P, NA, observacion)
@@ -197,39 +198,36 @@ def generate_acta(
 
     # ── 1. Token replacements simples ───────────────────────────────────────
     tokens = {
-        '%%EMPRESA%%':         header.get('empresa', ''),
-        '%%PLAN%%':            header.get('plan', 'BASE'),
-        '%%ACTA_NUM%%':        header.get('acta_num', header.get('fecha', '')),
-        '%%FECHA%%':           header.get('fecha', ''),
-        '%%JEFE_CLIENTE%%':    header.get('jefe_cliente', ''),
-        '%%USUARIO_IMPL%%':    header.get('usuario_impl', ''),
-        '%%EMAIL_IMPL%%':      header.get('email_impl', ''),
-        '%%JEFE_REX%%':        header.get('jefe_rex', ''),
-        '%%EMAIL_JEFE_REX%%':  header.get('email_jefe_rex', ''),
-        '%%CONSULTOR%%':       header.get('consultor', ''),
+        '%%EMPRESA%%':              header.get('empresa', ''),
+        '%%PLAN%%':                 header.get('plan', 'BASE'),
+        '%%ACTA_NUM%%':             header.get('acta_num', header.get('fecha', '')),
+        '%%FECHA%%':                header.get('fecha', ''),
+        '%%JEFE_CLIENTE%%':         header.get('jefe_cliente', ''),
+        '%%EMAIL_JEFE_CLIENTE%%':   header.get('email_jefe_cliente', ''),
+        '%%TEL_JEFE_CLIENTE%%':     header.get('tel_jefe_cliente', ''),
+        '%%USUARIO_IMPL%%':         header.get('usuario_impl', ''),
+        '%%EMAIL_IMPL%%':           header.get('email_impl', ''),
+        '%%TEL_USUARIO_IMPL%%':     header.get('tel_usuario_impl', ''),
+        '%%JEFE_REX%%':             header.get('jefe_rex', ''),
+        '%%EMAIL_JEFE_REX%%':       header.get('email_jefe_rex', ''),
+        '%%TEL_JEFE_REX%%':         header.get('tel_jefe_rex', ''),
+        '%%CONSULTOR%%':            header.get('consultor', ''),
+        '%%EMAIL_CONSULTOR%%':      header.get('email_consultor', ''),
+        '%%TEL_CONSULTOR%%':        header.get('tel_consultor', ''),
     }
     for token, value in tokens.items():
         xml = xml.replace(token, esc(value))
 
-    # ── 2. Asistentes — reemplazar todas las filas dinámicamente ─────────────
-    # Encontrar el bloque completo de filas de asistentes (fila 1 hasta fila 4)
-    # y reemplazarlo por tantas filas como haya en la lista
-    import re as _re
-
-    # Buscar la primera fila de datos (contiene %%ASISTENTE_1_NOMBRE%%)
+    # ── 2. Asistentes ────────────────────────────────────────────────────────
     pos_start = xml.find('%%ASISTENTE_1_NOMBRE%%')
-    # Buscar la última fila fija (contiene <w:t>4</w:t>)
     pos_end_marker = xml.find('<w:t>4</w:t>')
 
     if pos_start != -1 and pos_end_marker != -1:
-        # Retroceder hasta el <w:tr > de la primera fila
         start_tr = xml.rfind('<w:tr', 0, pos_start)
         while start_tr != -1 and xml[start_tr+5:start_tr+6] not in (' ', '\n', '\r'):
             start_tr = xml.rfind('<w:tr', 0, start_tr)
-        # Avanzar hasta el </w:tr> de la última fila (fila 4)
         end_tr = xml.find('</w:tr>', pos_end_marker) + len('</w:tr>')
 
-        # Generar solo las filas necesarias
         new_rows = '\n'.join([
             asistente_row(
                 a.get('nombre',''), a.get('cargo',''), a.get('gerencia',''), i+1
@@ -239,7 +237,6 @@ def generate_acta(
 
         xml = xml[:start_tr] + new_rows + xml[end_tr:]
     else:
-        # Fallback: reemplazar tokens simples
         xml = xml.replace('%%ASISTENTE_1_NOMBRE%%',
             esc(asistentes[0]['nombre']) if asistentes else '')
         xml = xml.replace('%%ASISTENTE_2_NOMBRE%%',
@@ -250,7 +247,6 @@ def generate_acta(
         para_ids = [f'2E{i:06X}' for i in range(len(dev_points))]
         first_id = '0190D4DB'
 
-        # Primer párrafo (reemplaza el placeholder)
         first_bullet = (
             f'<w:p w14:paraId="{first_id}" w14:textId="6640E4BA" '
             f'w:rsidR="009356C6" w:rsidRPr="00A4228A" '
@@ -299,7 +295,6 @@ def generate_acta(
         end_pos = xml.find(end_marker)
 
         if start_pos != -1 and end_pos != -1:
-            # Buscar <w:tr > (no <w:trPr>) antes del marcador de inicio
             search_from = start_pos
             start_tr = None
             while search_from > 0:
