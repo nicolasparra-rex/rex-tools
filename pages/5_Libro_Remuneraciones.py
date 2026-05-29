@@ -1,5 +1,5 @@
 """
-Rex+ Tools - Libro de Remuneraciones Electrónico
+Rex+ Tools - Migración Historia mediante LRE
 Transforma el CSV del LRE al formato de importación Rex+.
 """
 
@@ -24,7 +24,7 @@ st.set_page_config(
     layout="wide",
 )
 
-aplicar_branding(titulo_pagina="Libro de Remuneraciones")
+aplicar_branding(titulo_pagina="Migración Historia LRE")
 hero(
     titulo="Migración Historia mediante LRE",
     descripcion="Transforma el CSV del LRE al formato de importación Rex+. Carga los archivos de referencia y el CSV para comenzar.",
@@ -38,10 +38,10 @@ if not EQUIVALENCIAS_BASE.exists():
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for k, v_default in {
-    "empleado_bytes":    None,
-    "empresa_bytes":     None,
-    "equiv_override":    None,
-    "refs_cargadas":     False,
+    "empleado_bytes": None,
+    "empresa_bytes":  None,
+    "equiv_override": None,
+    "refs_cargadas":  False,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v_default
@@ -67,18 +67,27 @@ def safe_get(d, key, default=None):
 def round_awz(x):
     return math.floor(x + 0.5) if x >= 0 else math.ceil(x - 0.5)
 
+def safe_int(val, default):
+    """Convierte a int de forma segura, manejando NaN y None."""
+    try:
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return default
+        return int(float(val))
+    except (ValueError, TypeError):
+        return default
+
 
 # ── Carga de referencias ──────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def cargar_referencias(equiv_bytes, empleado_bytes, empresa_bytes):
-    xl_eq = pd.ExcelFile(io.BytesIO(equiv_bytes))
-    df_afp     = pd.read_excel(xl_eq, "afp")
-    df_porafp  = pd.read_excel(xl_eq, "porafp")
-    df_salud   = pd.read_excel(xl_eq, "salud")
-    df_sis     = pd.read_excel(xl_eq, "sis")
-    df_ccaf    = pd.read_excel(xl_eq, "ccaf")
-    df_porccaf = pd.read_excel(xl_eq, "porccaf")
-    df_tijor   = pd.read_excel(xl_eq, "tijor")
+    xl_eq       = pd.ExcelFile(io.BytesIO(equiv_bytes))
+    df_afp      = pd.read_excel(xl_eq, "afp")
+    df_porafp   = pd.read_excel(xl_eq, "porafp")
+    df_salud    = pd.read_excel(xl_eq, "salud")
+    df_sis      = pd.read_excel(xl_eq, "sis")
+    df_ccaf     = pd.read_excel(xl_eq, "ccaf")
+    df_porccaf  = pd.read_excel(xl_eq, "porccaf")
+    df_tijor    = pd.read_excel(xl_eq, "tijor")
     df_empleado = pd.read_excel(io.BytesIO(empleado_bytes), "Hoja 1")
     df_empresa  = pd.read_excel(io.BytesIO(empresa_bytes),  "Hoja 1")
     return {
@@ -103,10 +112,10 @@ def transformar(input_bytes, nombre, refs):
     mutual     = fila_emp["Mutual"]
     pct_mutual = fila_emp["% mutual"]
 
-    sis_row  = refs["sis"][refs["sis"]["proceso"] == periodo]
-    pct_sis  = float(sis_row["porcentaje"].iloc[0]) if not sis_row.empty else 0.0
+    sis_row     = refs["sis"][refs["sis"]["proceso"] == periodo]
+    pct_sis     = float(sis_row["porcentaje"].iloc[0]) if not sis_row.empty else 0.0
     porccaf_row = refs["porccaf"][refs["porccaf"]["periodo"] == periodo]
-    pct_ccaf = float(porccaf_row["porcentaje"].iloc[0]) if not porccaf_row.empty else 0.0
+    pct_ccaf    = float(porccaf_row["porcentaje"].iloc[0]) if not porccaf_row.empty else 0.0
     porafp_periodo = (
         refs["porafp"][refs["porafp"]["proceso"] == periodo]
         .set_index("nombre")["porcentaje"].to_dict()
@@ -127,27 +136,35 @@ def transformar(input_bytes, nombre, refs):
 
     filas = []
     for _, row in df_in.iterrows():
-        rut_trab   = normalizar_rut(row["Rut trabajador(1101)"])
-        afp_code   = int(row.get("AFP(1141)", 100))
-        afp_name   = safe_get(afp_map, afp_code, "afp")
-        pct_afp    = float(porafp_periodo.get(afp_name, 0) or 0)
-        salud_code = int(row.get("FONASA - ISAPRE(1143)", 102))
-        isapre     = safe_get(salud_map, salud_code, "fonasa")
-        ccaf_code  = row.get("CCAF(1110)", 0)
-        try:    ccaf_name = safe_get(ccaf_map, int(ccaf_code), "sincaja")
-        except: ccaf_name = "sincaja"
-        jorn_code = row.get("Código tipo de jornada(1107)", 101)
-        try:    jornada = safe_get(tijor_map, int(jorn_code), "C")
-        except: jornada = "C"
+        rut_trab = normalizar_rut(row["Rut trabajador(1101)"])
 
+        # ── AFP ───────────────────────────────────────────────────────────────
+        afp_code = safe_int(row.get("AFP(1141)"), 100)
+        afp_name = safe_get(afp_map, afp_code, "afp")
+        pct_afp  = float(porafp_periodo.get(afp_name, 0) or 0)
+
+        # ── Salud ─────────────────────────────────────────────────────────────
+        salud_code = safe_int(row.get("FONASA - ISAPRE(1143)"), 102)
+        isapre     = safe_get(salud_map, salud_code, "fonasa")
+
+        # ── CCAF ──────────────────────────────────────────────────────────────
+        ccaf_code = safe_int(row.get("CCAF(1110)"), 0)
+        ccaf_name = safe_get(ccaf_map, ccaf_code, "sincaja")
+
+        # ── Jornada ───────────────────────────────────────────────────────────
+        jorn_code = safe_int(row.get("Código tipo de jornada(1107)"), 101)
+        jornada   = safe_get(tijor_map, jorn_code, "C")
+
+        # ── Fecha inicio contrato ─────────────────────────────────────────────
         fecha_inic_raw = row.get("Fecha inicio contrato(1102)", None)
         try:
             fecha_inic_lre = pd.to_datetime(fecha_inic_raw, dayfirst=True)
             fecha_inic_str = fecha_inic_lre.strftime("%Y-%m-%d")
-        except:
+        except Exception:
             fecha_inic_lre = None
             fecha_inic_str = ""
 
+        # ── Datos del empleado ────────────────────────────────────────────────
         emp_key  = f"{rut_trab}_{fecha_inic_str}"
         emp_info = df_emp_idx.loc[emp_key] if emp_key in df_emp_idx.index else None
         if emp_info is not None:
@@ -157,16 +174,20 @@ def transformar(input_bytes, nombre, refs):
             num_contrato = "revisar"
             tipo_cont    = ""
 
+        # ── Antigüedad ────────────────────────────────────────────────────────
         if fecha_inic_lre is not None:
             fecha_fin_mes = pd.Timestamp(f"{periodo}-01") + pd.offsets.MonthEnd(0)
-            antiguedad = abs((fecha_fin_mes.year - fecha_inic_lre.year) * 12 + (fecha_fin_mes.month - fecha_inic_lre.month))
+            antiguedad = abs(
+                (fecha_fin_mes.year  - fecha_inic_lre.year)  * 12 +
+                (fecha_fin_mes.month - fecha_inic_lre.month)
+            )
         else:
             antiguedad = 0
 
-        afc_input     = float(row.get("AFC - Aporte empleador(4151)", 0) or 0)
-        causal_raw    = row.get("Causal término de contrato(1104)", None)
-        try:    causal = int(causal_raw)
-        except: causal = None
+        # ── AFC ───────────────────────────────────────────────────────────────
+        afc_input  = float(row.get("AFC - Aporte empleador(4151)", 0) or 0)
+        causal_raw = row.get("Causal término de contrato(1104)", None)
+        causal     = safe_int(causal_raw, None) if causal_raw is not None else None
 
         if antiguedad > 132:
             afc_solid_val = round_awz(afc_input)
@@ -197,7 +218,7 @@ def transformar(input_bytes, nombre, refs):
         else:
             dif_afc = ""
 
-        # ── FIX: manejo correcto de NaN y celdas vacías ───────────────────────
+        # ── Función v() con manejo de NaN ─────────────────────────────────────
         def v(col, default=0):
             val = row.get(col, default)
             try:
@@ -206,6 +227,7 @@ def transformar(input_bytes, nombre, refs):
             except (ValueError, TypeError):
                 return default
 
+        # ── Validación líquido ────────────────────────────────────────────────
         val_liq = (
             v("Sueldo(2101)") + v("Sobresueldo(2102)") + v("Comisiones(2103)") +
             v("Semana corrida(2104)") + v("Participación(2105)") + v("Gratificación(2106)") +
@@ -319,6 +341,7 @@ def transformar(input_bytes, nombre, refs):
         })
 
     df_out = pd.DataFrame(filas)
+    # Fix: quitar cero inicial de RUTs — Rex+ no acepta 05829866-2
     df_out["Id empleado"] = df_out["Id empleado"].apply(
         lambda r: r.lstrip("0") if isinstance(r, str) and r.startswith("0") else r
     )
@@ -330,7 +353,8 @@ def transformar(input_bytes, nombre, refs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def step_header(num, label, done=False):
-    bg   = "#1EBBEF" if done else "#1A3A5F"
+    bg     = "#1EBBEF" if done else "#1A3A5F"
+    suffix = " ✓" if done else ""
     st.markdown(f"""
     <div style="display:inline-flex;align-items:center;gap:8px;
                 background:white;border:1px solid #dde3f0;border-radius:99px;
@@ -339,9 +363,10 @@ def step_header(num, label, done=False):
         <span style="background:{bg};color:white;border-radius:50%;
                      width:22px;height:22px;display:inline-flex;
                      align-items:center;justify-content:center;
-                     font-size:11px;font-weight:700;">{"✓" if done else num}</span>
-        <span style="font-size:13px;font-weight:600;color:#1A3A5F;">{label}{"  ✓" if done else ""}</span>
+                     font-size:11px;font-weight:700;">{num}</span>
+        <span style="font-size:13px;font-weight:600;color:#1A3A5F;">{label}{suffix}</span>
     </div>""", unsafe_allow_html=True)
+
 
 # ── PASO 1: Archivos de referencia del cliente ────────────────────────────────
 paso1_ok = st.session_state.empleado_bytes and st.session_state.empresa_bytes
@@ -351,7 +376,7 @@ with st.expander("👥 empleado.xlsx · 🏢 empresa.xlsx", expanded=not paso1_o
     st.caption("Estos archivos se usan solo en esta sesión y no se guardan en ningún servidor.")
 
     with st.expander("📋 ¿Cómo generar estos archivos desde Rex+?", expanded=False):
-        st.markdown("Ejecuta cada consulta en Rex+, exporta como **.xlsx** y súbelo aquí.")
+        st.markdown("Ejecuta cada consulta en Rex+ (Módulo reportes / consulta directa), exporta como **.xlsx** y súbelo aquí.")
         st.markdown("**Consulta empleado.xlsx:**")
         st.code("""select contr.empleado as "Id empleado",
        contr.contrato as "Numero de contrato",
@@ -367,35 +392,47 @@ from T$empleadoscontr as contr""", language="sql")
        "cotizacionMutu" as "% mutual"
 from T$empresas""", language="sql")
 
-    import openpyxl, datetime as _dt
+    import openpyxl
+    import datetime as _dt
 
     def make_ejemplo_empleado():
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Hoja 1"
-        ws.append(["Id empleado","Numero de contrato","fechaInic","tipoCont","jubilado"])
-        ws.append(["12345678-9",1,_dt.date(2020,1,15),"I",0])
-        ws.append(["98765432-1",1,_dt.date(2018,6,1),"O",0])
+        ws.append(["Id empleado", "Numero de contrato", "fechaInic", "tipoCont", "jubilado"])
+        ws.append(["12345678-9", 1, _dt.date(2020, 1, 15), "I", 0])
+        ws.append(["98765432-1", 1, _dt.date(2018, 6,  1), "O", 0])
+        ws.append(["11111111-1", 2, _dt.date(2022, 3, 10), "F", 0])
         buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf.read()
 
     def make_ejemplo_empresa():
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Hoja 1"
-        ws.append(["Rut empresa","idempresa","Mutual","% mutual"])
-        ws.append(["76016236-1",1,"ACHS",0.93])
+        ws.append(["Rut empresa", "idempresa", "Mutual", "% mutual"])
+        ws.append(["76016236-1", 1, "ACHS", 0.93])
+        ws.append(["12345678-0", 2, "IST",  0.85])
         buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf.read()
 
     col_ej1, col_ej2 = st.columns(2)
     with col_ej1:
-        st.download_button("📥 Ejemplo empleado.xlsx", data=make_ejemplo_empleado(),
+        st.download_button(
+            "📥 Descargar ejemplo empleado.xlsx",
+            data=make_ejemplo_empleado(),
             file_name="ejemplo_empleado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
+            use_container_width=True,
+        )
     with col_ej2:
-        st.download_button("📥 Ejemplo empresa.xlsx", data=make_ejemplo_empresa(),
+        st.download_button(
+            "📥 Descargar ejemplo empresa.xlsx",
+            data=make_ejemplo_empresa(),
             file_name="ejemplo_empresa.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
+            use_container_width=True,
+        )
 
     st.divider()
-    st.warning("⚠️ **Importante:** Elimina la primera fila de `empleado.xlsx` y `empresa.xlsx` antes de subir. Esa fila contiene el nombre de la consulta.")
+    st.warning(
+        "⚠️ **Importante:** Elimina la primera fila de `empleado.xlsx` y `empresa.xlsx` "
+        "antes de subir. Esa fila contiene el nombre de la consulta y no debe incluirse en los datos."
+    )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -421,22 +458,29 @@ from T$empresas""", language="sql")
 st.divider()
 
 # ── PASO 2: Equivalencias ─────────────────────────────────────────────────────
-equiv_ok = st.session_state.equiv_override or EQUIVALENCIAS_BASE.exists()
+equiv_ok = bool(st.session_state.equiv_override) or EQUIVALENCIAS_BASE.exists()
 step_header(2, "Equivalencias", done=equiv_ok)
 
 with st.expander("⚙️ Gestión de equivalencias", expanded=not equiv_ok):
-    tab1, tab2, tab3 = st.tabs(["📥 Descargar base", "📤 Usar actualizada", "💾 Actualizar archivo equivalencia (admin)"])
+    tab1, tab2, tab3 = st.tabs([
+        "📥 Descargar base",
+        "📤 Usar actualizada",
+        "💾 Actualizar archivo equivalencia (admin)",
+    ])
 
     with tab1:
         if EQUIVALENCIAS_BASE.exists():
             with open(EQUIVALENCIAS_BASE, "rb") as f:
-                st.download_button("📥 Descargar equivalencias base", data=f.read(),
+                st.download_button(
+                    "📥 Descargar equivalencias base",
+                    data=f.read(),
                     file_name="equivalencias.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True, type="primary")
-            st.caption("Descárgala, modifícala y súbela en la pestaña '📤 Usar actualizada'.")
+                    use_container_width=True, type="primary",
+                )
+            st.caption("Descárgala, modifícala en Excel y súbela en la pestaña '📤 Usar actualizada'.")
         else:
-            st.warning("No se encontró el archivo base. Sube una versión en la pestaña '📤 Usar actualizada'.")
+            st.warning("No se encontró el archivo base. Sube una versión en '📤 Usar actualizada'.")
 
     with tab2:
         up_equiv = st.file_uploader("Sube tu equivalencias.xlsx actualizada", type=["xlsx"], key="up_equiv")
@@ -486,10 +530,10 @@ with st.expander("⚙️ Gestión de equivalencias", expanded=not equiv_ok):
                         requests.post(f"https://api.github.com/repos/{owner}/{repo}/git/refs", headers=headers,
                                       json={"ref": f"refs/heads/{branch_name}", "sha": sha_main})
                         content_b64 = base64.b64encode(pr_file.read()).decode()
-                        r3 = requests.put(f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}",
-                                          headers=headers,
-                                          json={"message": f"Actualizar equivalencias: {pr_desc}",
-                                                "content": content_b64, "sha": sha_file, "branch": branch_name})
+                        requests.put(f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}",
+                                     headers=headers,
+                                     json={"message": f"Actualizar equivalencias: {pr_desc}",
+                                           "content": content_b64, "sha": sha_file, "branch": branch_name})
                         r4 = requests.post(f"https://api.github.com/repos/{owner}/{repo}/pulls", headers=headers,
                                            json={"title": f"Equivalencias: {pr_desc}", "head": branch_name,
                                                  "base": "main", "body": f"Cambio: {pr_desc}"})
@@ -561,16 +605,19 @@ else:
             total_liq_dif = sum((r["df"]["Validacion Liquido"] != 0).sum() for r in resultados)
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("📄 Archivos", len(resultados))
-            c2.metric("👤 Trabajadores", total_filas)
+            c1.metric("📄 Archivos",        len(resultados))
+            c2.metric("👤 Trabajadores",     total_filas)
             c3.metric("⚠️ Sin tipo contrato", total_revisar)
-            c4.metric("🔍 AFC a revisar", total_dif_afc)
+            c4.metric("🔍 AFC a revisar",    total_dif_afc)
             if total_liq_dif > 0:
                 st.warning(f"⚠️ {total_liq_dif} trabajador(es) con diferencia en líquido.")
 
             for r in resultados:
                 df = r["df"]
-                with st.expander(f"📄 {r['nombre']} — {r['rut']} | {r['periodo']} | {len(df)} trabajadores", expanded=len(resultados) == 1):
+                with st.expander(
+                    f"📄 {r['nombre']} — {r['rut']} | {r['periodo']} | {len(df)} trabajadores",
+                    expanded=len(resultados) == 1
+                ):
                     sc = df[df["Número de contrato"] == "revisar"]
                     if not sc.empty:
                         st.warning(f"⚠️ Sin tipo contrato: {', '.join(sc['Id empleado'].tolist())}")
@@ -584,9 +631,9 @@ else:
                         st.success("✅ Sin observaciones.")
 
                     st.dataframe(
-                        df[["Id empleado","Número de contrato","afp","isapre",
-                            "Nro días trabajados","Total líquido(5501)",
-                            "Validacion Liquido","DiferenciasAFC"]],
+                        df[["Id empleado", "Número de contrato", "afp", "isapre",
+                            "Nro días trabajados", "Total líquido(5501)",
+                            "Validacion Liquido", "DiferenciasAFC"]],
                         use_container_width=True, hide_index=True,
                     )
 
@@ -594,9 +641,10 @@ else:
                     buf.write("\ufeff".encode("utf-8"))
                     buf.write(df.to_csv(index=False, encoding="utf-8", decimal=",").encode("utf-8"))
                     buf.seek(0)
+                    nombre_salida = f"{os.path.splitext(r['nombre'])[0]}_salida.csv"
                     st.download_button(
-                        f"📥 Descargar {os.path.splitext(r['nombre'])[0]}_salida.csv",
-                        data=buf, file_name=f"{os.path.splitext(r['nombre'])[0]}_salida.csv",
+                        f"📥 Descargar {nombre_salida}",
+                        data=buf, file_name=nombre_salida,
                         mime="text/csv", type="primary", key=f"dl_{r['nombre']}",
                     )
 
