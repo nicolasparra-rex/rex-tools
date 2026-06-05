@@ -113,7 +113,8 @@ def build_remuneraciones(ws, d):
         ("Empresa / Razón Social", d["empresa"]),
         ("RUT Empresa", d["rut"]),
         ("Vendedor", d["vendedor"]),
-        ("Jefe de Proyecto / Dirección", d["direccion"]),
+        ("Jefe de Proyecto", d["jefe_proyecto"]),
+        ("Dirección", d["direccion"]),
         ("Correo de Contacto", d["correo"]),
         ("Número de Contacto", d["telefono"]),
         ("Plan Contratado", d["plan"]),
@@ -159,6 +160,7 @@ def build_asistencia(ws, d):
     emp = [
         ("Empresa", d["empresa"]),
         ("RUT", d["rut"]),
+        ("Jefe de Proyecto", d["jefe_proyecto"]),
         ("Dirección", d["direccion"]),
         ("Vendedor", d["vendedor"]),
         ("Empresa Venta", d["empresa_venta"]),
@@ -216,7 +218,8 @@ with tab_rem:
     empresa_r       = c1.text_input("Empresa / Razón Social", placeholder="Ej: Fundación Ejemplo", key="r_empresa")
     rut_r           = c1.text_input("RUT Empresa", placeholder="Ej: 65058734-0", key="r_rut")
     vendedor_r      = c1.selectbox("Vendedor", ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo Verdejo', 'Francisca Soto', 'Francisco Reig', 'Gislaine Sepulveda', 'Gonzalo Pereira', 'Jenny Chavarro', 'Juan Carlos Rabi', 'Marcelo Baeza', 'Matías Ossandon', 'Mauricio Bastías', 'Roberto Ramírez', 'Sebastian Ulloa', 'Tamara Castro', 'Valentina Berrios', 'Yanin Rebolledo', 'Otro', 'Sin Definir'], key="r_vendedor")
-    direccion_r     = c2.text_input("Jefe de Proyecto / Dirección", placeholder="Ej: Av. Principal 123", key="r_direccion")
+    jefe_proyecto_r = c2.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="r_jefe_proyecto")
+    direccion_r     = c2.text_input("Dirección", placeholder="Ej: Av. Principal 123", key="r_direccion")
     correo_r        = c2.text_input("Correo de Contacto", placeholder="correo@empresa.cl", key="r_correo")
     telefono_r      = c2.text_input("Número de Contacto", placeholder="Ej: 56912345678", key="r_telefono")
     plan_r          = c2.selectbox("Plan Contratado",
@@ -266,6 +269,7 @@ with tab_asi:
     c5, c6 = st.columns(2)
     empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
     rut_a           = c5.text_input("RUT", placeholder="Ej: 69091300-3", key="a_rut")
+    jefe_proyecto_a = c5.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="a_jefe_proyecto")
     direccion_a     = c5.text_input("Dirección", placeholder="Ej: Maria Errazuriz 1507", key="a_direccion")
     vendedor_a      = c5.selectbox("Vendedor", ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo Verdejo', 'Francisca Soto', 'Francisco Reig', 'Gislaine Sepulveda', 'Gonzalo Pereira', 'Jenny Chavarro', 'Juan Carlos Rabi', 'Marcelo Baeza', 'Matías Ossandon', 'Mauricio Bastías', 'Roberto Ramírez', 'Sebastian Ulloa', 'Tamara Castro', 'Valentina Berrios', 'Yanin Rebolledo', 'Otro', 'Sin Definir'], key="a_vendedor")
     empresa_venta_a = c6.selectbox("Empresa Venta", ["REX", "Visma", "Manager", "Otro"], key="a_emp_venta")
@@ -315,7 +319,7 @@ nombre_archivo = st.text_input(
 if st.button("📥 Generar y Descargar Excel", type="primary", use_container_width=False):
     data_rem = {
         "ot": ot, "empresa": empresa_r, "rut": rut_r,
-        "vendedor": vendedor_r, "direccion": direccion_r,
+        "vendedor": vendedor_r, "jefe_proyecto": jefe_proyecto_r, "direccion": direccion_r,
         "correo": correo_r, "telefono": telefono_r,
         "plan": plan_r, "colaboradores": colaboradores_r,
         "razones_sociales": razones_r, "estructura": estructura_r,
@@ -325,7 +329,7 @@ if st.button("📥 Generar y Descargar Excel", type="primary", use_container_wid
         "transferencia": transferencia_r, "usa_api": usa_api_r, "observaciones": observaciones_r,
     }
     data_asi = {
-        "empresa": empresa_a, "rut": rut_a, "direccion": direccion_a,
+        "empresa": empresa_a, "rut": rut_a, "jefe_proyecto": jefe_proyecto_a, "direccion": direccion_a,
         "vendedor": vendedor_a, "empresa_venta": empresa_venta_a,
         "contacto_nombre": contacto_nombre, "contacto_numero": contacto_numero,
         "contacto_email": contacto_email, "plan_asistencia": plan_a,
