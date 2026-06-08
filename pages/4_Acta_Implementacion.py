@@ -12,7 +12,7 @@ import streamlit as st
 import pandas as pd
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_ROOT     = Path(__file__).parent.parent          # raíz del repo
+_ROOT     = Path(__file__).parent.parent
 _ACTA_DIR = _ROOT / "acta_app"
 _LIB_DIR  = _ROOT / "lib"
 
@@ -23,7 +23,6 @@ from branding import aplicar_branding, aplicar_footer, hero
 from extractor import extract_all
 from generator import generate_acta
 
-# ── Config ────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Acta de Implementación · REX+",
     page_icon="📄",
@@ -38,7 +37,6 @@ hero(
     icono="📄",
 )
 
-# ── Rutas de datos ────────────────────────────────────────────────────────────
 CLIENTES_PATH = _ACTA_DIR / "clientes.json"
 EQUIPO_PATH   = _ACTA_DIR / "equipo.json"
 
@@ -67,7 +65,7 @@ def delete_client(empresa: str):
     with open(CLIENTES_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def load_equipo():
+def load_equipo() -> dict:
     if EQUIPO_PATH.exists():
         with open(EQUIPO_PATH, encoding='utf-8') as f:
             return json.load(f)
@@ -83,14 +81,28 @@ def add_equipo_member(rol: str, nombre: str, email: str, telefono: str = ""):
         data[rol].append({"nombre": nombre, "email": email, "telefono": telefono})
         save_equipo(data)
 
+def update_equipo_telefono(rol: str, nombre: str, telefono: str):
+    data = load_equipo()
+    for m in data[rol]:
+        if m["nombre"] == nombre:
+            m["telefono"] = telefono
+            break
+    save_equipo(data)
+
 def delete_equipo_member(rol: str, nombre: str):
     data = load_equipo()
     data[rol] = [m for m in data[rol] if m["nombre"] != nombre]
     save_equipo(data)
 
+def reset_notes():
+    for k in ["dev_points", "activities", "notes_extracted", "extracted_fecha"]:
+        v = st.session_state[k]
+        st.session_state[k] = ([] if isinstance(v, list)
+                               else False if isinstance(v, bool)
+                               else "")
+
 def step_pill(num: int, label: str, done: bool = False):
-    cls  = "done" if done else ""
-    icon = "✓"    if done else str(num)
+    icon = "✓" if done else str(num)
     bg   = "#1EBBEF" if done else "#1A3A5F"
     st.markdown(f"""
     <div style="display:inline-flex;align-items:center;gap:8px;
@@ -119,7 +131,7 @@ for k, v in {
 col_form, col_right = st.columns([3, 2], gap="large")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COLUMNA IZQUIERDA — Formulario
+# COLUMNA IZQUIERDA
 # ═══════════════════════════════════════════════════════════════════════════════
 with col_form:
 
@@ -221,35 +233,53 @@ with col_form:
         jefe_default = client["jefe_rex"] if client else (jefes_nombres[0] if jefes_nombres else "— Nuevo —")
         jefe_idx     = jefe_opts.index(jefe_default) if jefe_default in jefe_opts else 0
         jefe_sel     = st.selectbox("Jefe de proyecto REX+", jefe_opts, index=jefe_idx)
+
         if jefe_sel == "— Nuevo —":
             jefe_rex       = st.text_input("Nombre jefe *", placeholder="NOMBRE APELLIDO")
             email_jefe_rex = st.text_input("Email jefe", placeholder="nombre@visma.com")
-            tel_jefe_rex   = st.text_input("Teléfono jefe", placeholder="+56 9 XXXX XXXX")
+            tel_jefe_rex   = st.text_input("Teléfono jefe", placeholder="+56 9 XXXX XXXX", key="tel_jefe_new")
         else:
             jefe_data      = next(m for m in jefes_list if m["nombre"] == jefe_sel)
             jefe_rex       = jefe_sel
-            email_jefe_rex = st.text_input("Email jefe", value=jefe_data["email"])
+            email_jefe_rex = st.text_input("Email jefe", value=jefe_data["email"], key="email_jefe_exist")
             tel_jefe_rex   = st.text_input("Teléfono jefe",
                                            value=jefe_data.get("telefono", ""),
-                                           placeholder="+56 9 XXXX XXXX")
+                                           placeholder="+56 9 XXXX XXXX",
+                                           key="tel_jefe_exist")
+            # Guardar teléfono si se ingresó
+            tel_guardado_j = jefe_data.get("telefono", "")
+            if tel_jefe_rex and tel_jefe_rex != tel_guardado_j:
+                if st.button("💾 Guardar teléfono jefe", key="save_tel_jefe", use_container_width=True):
+                    update_equipo_telefono("jefes", jefe_sel, tel_jefe_rex)
+                    st.toast("✓ Teléfono guardado.", icon="✅")
+                    st.rerun()
 
     with col2:
         cons_opts    = ["— Nuevo —"] + consultores_nombres
         cons_default = client["consultor"] if client else (consultores_nombres[0] if consultores_nombres else "— Nuevo —")
         cons_idx     = cons_opts.index(cons_default) if cons_default in cons_opts else 0
         cons_sel     = st.selectbox("Consultor REX", cons_opts, index=cons_idx)
+
         if cons_sel == "— Nuevo —":
             consultor       = st.text_input("Nombre consultor *", placeholder="NOMBRE APELLIDO")
             email_consultor = st.text_input("Email consultor", placeholder="nombre@visma.com")
-            tel_consultor   = st.text_input("Teléfono consultor", placeholder="+56 9 XXXX XXXX")
+            tel_consultor   = st.text_input("Teléfono consultor", placeholder="+56 9 XXXX XXXX", key="tel_cons_new")
         else:
             cons_data       = next(m for m in consultores_list if m["nombre"] == cons_sel)
             consultor       = cons_sel
-            email_consultor = st.text_input("Email consultor", value=cons_data["email"], key="email_cons")
+            email_consultor = st.text_input("Email consultor", value=cons_data["email"], key="email_cons_exist")
             tel_consultor   = st.text_input("Teléfono consultor",
                                             value=cons_data.get("telefono", ""),
                                             placeholder="+56 9 XXXX XXXX",
-                                            key="tel_cons")
+                                            key="tel_cons_exist")
+            # Guardar teléfono si se ingresó
+            tel_guardado_c = cons_data.get("telefono", "")
+            if tel_consultor and tel_consultor != tel_guardado_c:
+                if st.button("💾 Guardar teléfono consultor", key="save_tel_cons", use_container_width=True):
+                    update_equipo_telefono("consultores", cons_sel, tel_consultor)
+                    st.toast("✓ Teléfono guardado.", icon="✅")
+                    st.rerun()
+
         horas = st.number_input("Horas de sesión", min_value=1, max_value=8,
                                 value=int(client["horas"]) if client else 4)
 
@@ -258,13 +288,13 @@ with col_form:
         if jefe_sel == "— Nuevo —" and jefe_rex:
             if st.button("💾 Guardar jefe", use_container_width=True):
                 add_equipo_member("jefes", jefe_rex, email_jefe_rex, tel_jefe_rex)
-                st.success(f"✓ Jefe '{jefe_rex}' guardado.")
+                st.toast(f"✓ Jefe '{jefe_rex}' guardado.", icon="✅")
                 st.rerun()
     with col_gc:
         if cons_sel == "— Nuevo —" and consultor:
             if st.button("💾 Guardar consultor", use_container_width=True):
                 add_equipo_member("consultores", consultor, email_consultor, tel_consultor)
-                st.success(f"✓ Consultor '{consultor}' guardado.")
+                st.toast(f"✓ Consultor '{consultor}' guardado.", icon="✅")
                 st.rerun()
 
     with st.expander("🗑 Gestionar equipo guardado"):
@@ -272,14 +302,14 @@ with col_form:
         with col_ej:
             st.markdown("**Jefes**")
             for m in jefes_list:
-                c1, c2 = st.columns([3,1])
+                c1, c2 = st.columns([3, 1])
                 c1.write(m["nombre"])
                 if c2.button("🗑", key=f"del_j_{m['nombre']}"):
                     delete_equipo_member("jefes", m["nombre"]); st.rerun()
         with col_ec:
             st.markdown("**Consultores**")
             for m in consultores_list:
-                c1, c2 = st.columns([3,1])
+                c1, c2 = st.columns([3, 1])
                 c1.write(m["nombre"])
                 if c2.button("🗑", key=f"del_c_{m['nombre']}"):
                     delete_equipo_member("consultores", m["nombre"]); st.rerun()
@@ -309,12 +339,17 @@ with col_form:
     step_pill(5, "Asistentes a la sesión")
     st.markdown("### Asistentes a la sesión")
 
-    default_asistentes = [
-        {"nombre": client["usuario_impl"] if client else "", "cargo": "", "gerencia": ""},
-        {"nombre": client["jefe_cliente"] if client else "", "cargo": "", "gerencia": ""},
-        {"nombre": "", "cargo": "", "gerencia": ""},
-        {"nombre": "", "cargo": "", "gerencia": ""},
-    ]
+    # Construir lista base desde el cliente guardado, o desde los campos actuales
+    if client and client.get("asistentes"):
+        default_asistentes = client["asistentes"]
+    else:
+        default_asistentes = [
+            {"nombre": client["usuario_impl"] if client else usuario_impl, "cargo": "", "gerencia": ""},
+            {"nombre": client["jefe_cliente"] if client else jefe_cliente,  "cargo": "", "gerencia": ""},
+            {"nombre": jefe_rex,   "cargo": "", "gerencia": ""},
+            {"nombre": consultor,  "cargo": "", "gerencia": ""},
+        ]
+
     edited = st.data_editor(
         pd.DataFrame(default_asistentes),
         column_config={
@@ -329,6 +364,12 @@ with col_form:
 
     # ── Guardar cliente ───────────────────────────────────────────────────────
     def client_payload(nombre_display="", keyword_drive=""):
+        asistentes_actuales = [
+            {"nombre": str(row["nombre"]), "cargo": str(row.get("cargo", "")),
+             "gerencia": str(row.get("gerencia", ""))}
+            for _, row in edited.iterrows()
+            if str(row["nombre"]).strip()
+        ]
         return {
             "nombre_display":     nombre_display or empresa[:20],
             "empresa":            empresa,
@@ -344,6 +385,7 @@ with col_form:
             "consultor":          consultor,
             "horas":              int(horas),
             "keyword_drive":      keyword_drive,
+            "asistentes":         asistentes_actuales,
         }
 
     if is_new:
@@ -358,8 +400,9 @@ with col_form:
                         nombre_display,
                         nombre_display.lower() if nombre_display else "",
                     ))
-                    st.success(f"✓ Cliente '{nombre_display}' guardado.")
+                    st.toast(f"✓ Cliente '{nombre_display}' guardado.", icon="✅")
                     st.session_state.edit_mode = False
+                    reset_notes()  # ← CAMBIO 1
                     st.rerun()
     elif st.session_state.edit_mode:
         if st.button("💾 Guardar cambios", use_container_width=True, type="primary"):
@@ -370,16 +413,16 @@ with col_form:
                     client["nombre_display"],
                     client.get("keyword_drive", ""),
                 ))
-                st.success(f"✓ Cambios guardados para **{client['nombre_display']}**.")
+                st.toast(f"✓ Cambios guardados para {client["nombre_display"]}.", icon="✅")
                 st.session_state.edit_mode = False
+                reset_notes()  # ← CAMBIO 1
                 st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COLUMNA DERECHA — Notas + Generar
+# COLUMNA DERECHA
 # ═══════════════════════════════════════════════════════════════════════════════
 with col_right:
 
-    # ── PASO 6: Notas de Gemini ───────────────────────────────────────────────
     step_pill(6, "Sube las notas de Gemini", done=st.session_state.notes_extracted)
     st.markdown("### Notas de sesión (Gemini)")
 
@@ -408,12 +451,11 @@ with col_right:
 
     st.divider()
 
-    # ── PASO 7: Generar acta ──────────────────────────────────────────────────
     step_pill(7, "Genera el acta", done=st.session_state.docx_bytes is not None)
     st.markdown("### Generar acta")
 
     fecha_str     = fecha.strftime("%d-%m-%Y")
-    alias         = empresa.split("(")[-1].replace(")","").strip()[:12] if "(" in empresa else empresa[:12]
+    alias         = empresa.split("(")[-1].replace(")", "").strip()[:12] if "(" in empresa else empresa[:12]
     acta_filename = f"Acta_{alias}_{fecha_str}.docx".replace(" ", "_")
 
     if st.button("📄 Generar acta .docx", type="primary", use_container_width=True):
@@ -441,11 +483,18 @@ with col_right:
                         "tel_consultor":      tel_consultor,
                     }
                     asistentes_list = [
-                        {"nombre": row["nombre"], "cargo": row.get("cargo",""),
-                         "gerencia": row.get("gerencia","")}
+                        {"nombre": str(row["nombre"]), "cargo": str(row.get("cargo", "")),
+                         "gerencia": str(row.get("gerencia", ""))}
                         for _, row in edited.iterrows()
                         if str(row["nombre"]).strip()
                     ]
+
+                    # Auto-guardar asistentes en el cliente ← CAMBIO 4
+                    if client and asistentes_list:
+                        updated = dict(client)
+                        updated["asistentes"] = asistentes_list
+                        save_client(updated)
+
                     st.session_state.docx_bytes   = generate_acta(
                         header=header,
                         asistentes=asistentes_list,
@@ -469,11 +518,12 @@ with col_right:
         )
         st.divider()
         if st.button("🔁 Nueva acta", use_container_width=True):
-            for k in ["dev_points","activities","notes_extracted",
-                      "extracted_fecha","docx_bytes","docx_filename"]:
-                st.session_state[k] = ([] if isinstance(st.session_state[k], list)
-                                       else False if isinstance(st.session_state[k], bool)
-                                       else "" if isinstance(st.session_state[k], str)
+            for k in ["dev_points", "activities", "notes_extracted",
+                      "extracted_fecha", "docx_bytes", "docx_filename"]:
+                v = st.session_state[k]
+                st.session_state[k] = ([] if isinstance(v, list)
+                                       else False if isinstance(v, bool)
+                                       else "" if isinstance(v, str)
                                        else None)
             st.rerun()
 
