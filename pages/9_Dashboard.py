@@ -199,13 +199,14 @@ emp_activos   = activos["empleados"].sum()
 emp_detenidos = detenidos["empleados"].sum()
 emp_total     = total_rex["empleados"].sum()
 
-# Salidas planificadas por end_date
-def en_mes(d, ini, fin): return d is not None and ini <= d <= fin
+def en_mes(d, ini, fin):
+    """d es un objeto date, ini y fin también."""
+    return d is not None and ini <= d <= fin
 
-sal_ant    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_ant_ini, mes_ant_fin))]
-sal_act    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_act_ini, mes_act_fin))]
-sal_sig    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_sig_ini, mes_sig_fin))]
-sal_sin_ag = dff[dff["end_date"].isna() | dff["end_date"].isnull()]
+sal_ant    = dff_rex[dff_rex["end_date"].apply(lambda d: en_mes(d, mes_ant_ini, mes_ant_fin))]
+sal_act    = dff_rex[dff_rex["end_date"].apply(lambda d: en_mes(d, mes_act_ini, mes_act_fin))]
+sal_sig    = dff_rex[dff_rex["end_date"].apply(lambda d: en_mes(d, mes_sig_ini, mes_sig_fin))]
+sal_sin_ag = dff_rex[dff_rex["end_date"].isna() | dff_rex["end_date"].isnull()]
 
 emp_sal_ant    = sal_ant["empleados"].sum()
 emp_sal_act    = sal_act["empleados"].sum()
