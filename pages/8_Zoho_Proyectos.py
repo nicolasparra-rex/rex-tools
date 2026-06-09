@@ -106,9 +106,10 @@ def build_df(projects):
             "Clave":        p.get("key", ""),
             "Proyecto":     p.get("name", ""),
             "Estado":       status_icon(status_name) + " " + status_name,
-            "Consultor":    p.get("owner_name", "–"),
+            "Jefe de Proyecto": p.get("owner_name", "–"),
             "Plan":         cf(cfields, "Plan Contratado", "plan_contratado"),
-            "Módulo":       cf(cfields, "Modulo Vendido", "modulo_vendido"),
+            "Consultor":        cf(cfields, "Consultor 1"),
+            "Fecha Facturación": fmt_date(cf(cfields, "Fecha Facturación", "Fecha Facturacion")),
             "Empleados":    cf(cfields, "Cantidad de empleados", "cantidad_de_empleados"),
             "Vendedor":     cf(cfields, "Vendedor", "vendedor"),
             "Razón Social": cf(cfields, "Razón social", "razon_social"),
@@ -121,6 +122,7 @@ def build_df(projects):
             "_status_raw":  status_name,
             "_plan_raw":    cf(cfields, "Plan Contratado", "plan_contratado"),
             "_owner_raw":   p.get("owner_name", ""),
+            "_consultor_raw": cf(parse_custom_fields(p.get("custom_fields", [])), "Consultor 1"),
             "_group_raw":   p.get("group_name", ""),
             "_cfields":     cfields,
         })
@@ -191,7 +193,7 @@ with fc3:
     planes = ["Todos"] + sorted([x for x in df["_plan_raw"].dropna().unique() if x and x != "–"])
     filtro_plan = st.selectbox("Plan", planes)
 with fc4:
-    consultores = ["Todos"] + sorted(df["_owner_raw"].dropna().unique().tolist())
+    consultores = ["Todos"] + sorted([x for x in df["_consultor_raw"].dropna().unique() if x and x != "–"])
     filtro_consultor = st.selectbox("Consultor", consultores)
 with fc5:
     grupos = ["Todos"] + sorted([x for x in df["_group_raw"].dropna().unique() if x])
@@ -208,7 +210,7 @@ if filtro_estado != "Todos":
 if filtro_plan != "Todos":
     mask &= df["_plan_raw"] == filtro_plan
 if filtro_consultor != "Todos":
-    mask &= df["_owner_raw"] == filtro_consultor
+    mask &= df["_consultor_raw"] == filtro_consultor
 if filtro_grupo != "Todos":
     mask &= df["_group_raw"] == filtro_grupo
 
@@ -219,7 +221,7 @@ st.caption(f"{len(df_filtered)} proyectos encontrados")
 st.divider()
 st.subheader("📊 Listado de proyectos")
 
-cols_show = ["Clave", "Proyecto", "Grupo", "Estado", "Consultor", "Plan", "Módulo", "Vendedor", "Empleados", "Tareas ✅", "Tareas 🔓", "Creado"]
+cols_show = ["Clave", "Proyecto", "Grupo", "Estado", "Consultor", "Jefe de Proyecto", "Plan", "Vendedor", "Empleados", "Fecha Facturación", "Tareas ✅", "Tareas 🔓", "Creado"]
 st.dataframe(
     df_filtered[cols_show],
     use_container_width=True,
