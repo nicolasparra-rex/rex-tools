@@ -189,9 +189,9 @@ dff_rex = dff[dff["grupo"].isin(GRUPOS_REX)]
 # Status
 STATUS_DETENIDO = ["detenido por cliente", "detenido por comercial"]
 def es_detenido(s): return any(d in s.lower() for d in STATUS_DETENIDO)
-def es_activo(s):   return not es_detenido(s)
+def es_activo(s):   return "en curso" in s.lower()
 
-activos   = dff_rex[dff_rex["status"].apply(es_activo)] if not dff_rex.empty else dff_rex
+activos   = dff_rex[dff_rex["status"].apply(es_activo)]   if not dff_rex.empty else dff_rex
 detenidos = dff_rex[dff_rex["status"].apply(es_detenido)] if not dff_rex.empty else dff_rex
 total_rex = dff_rex
 
@@ -199,11 +199,7 @@ emp_activos   = activos["empleados"].sum()
 emp_detenidos = detenidos["empleados"].sum()
 emp_total     = total_rex["empleados"].sum()
 
-# Últimos 3 meses = proyectos creados en los últimos 3 meses
-ult3     = dff_rex[dff_rex["created_date"].apply(lambda d: d is not None and tres_meses_ini <= d <= hoy)]
-emp_ult3 = ult3["empleados"].sum()
-
-# Salidas planificadas por end_date (sobre dff filtrado por usuario, no solo rex)
+# Salidas planificadas por end_date
 def en_mes(d, ini, fin): return d is not None and ini <= d <= fin
 
 sal_ant    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_ant_ini, mes_ant_fin))]
@@ -235,11 +231,6 @@ with col_izq:
     r3c1, r3c2 = st.columns(2)
     r3c1.metric("Total",     fmt_num(len(total_rex)))
     r3c2.metric("Empleados", fmt_num(emp_total))
-
-    st.markdown("")
-    r4c1, r4c2 = st.columns(2)
-    r4c1.metric("Últimos 3 meses", fmt_num(len(ult3)))
-    r4c2.metric("Empleados",       fmt_num(emp_ult3))
 
 with col_der:
     st.markdown("### 📤 Salidas planificadas (end date)")
