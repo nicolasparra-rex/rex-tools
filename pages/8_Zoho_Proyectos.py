@@ -112,6 +112,7 @@ def build_df(projects):
             "Empleados":    cf(cfields, "Cantidad de empleados", "cantidad_de_empleados"),
             "Vendedor":     cf(cfields, "Vendedor", "vendedor"),
             "Razón Social": cf(cfields, "Razón social", "razon_social"),
+            "Grupo":        p.get("group_name", "–"),
             "Tareas ✅":    task_count.get("closed", 0),
             "Tareas 🔓":    task_count.get("open", 0),
             "Creado":       fmt_date(p.get("created_date", "")),
@@ -120,6 +121,7 @@ def build_df(projects):
             "_status_raw":  status_name,
             "_plan_raw":    cf(cfields, "Plan Contratado", "plan_contratado"),
             "_owner_raw":   p.get("owner_name", ""),
+            "_group_raw":   p.get("group_name", ""),
             "_cfields":     cfields,
         })
     return pd.DataFrame(rows)
@@ -178,7 +180,7 @@ st.divider()
 
 # ── FILTROS ───────────────────────────────────────────────────────────────────
 st.subheader("🔍 Filtros")
-fc1, fc2, fc3, fc4 = st.columns(4)
+fc1, fc2, fc3, fc4, fc5 = st.columns(5)
 
 with fc1:
     search = st.text_input("Buscar cliente o proyecto", placeholder="Nombre, razón social...")
@@ -191,6 +193,9 @@ with fc3:
 with fc4:
     consultores = ["Todos"] + sorted(df["_owner_raw"].dropna().unique().tolist())
     filtro_consultor = st.selectbox("Consultor", consultores)
+with fc5:
+    grupos = ["Todos"] + sorted([x for x in df["_group_raw"].dropna().unique() if x])
+    filtro_grupo = st.selectbox("Grupo", grupos)
 
 mask = pd.Series([True] * len(df))
 if search:
@@ -204,6 +209,8 @@ if filtro_plan != "Todos":
     mask &= df["_plan_raw"] == filtro_plan
 if filtro_consultor != "Todos":
     mask &= df["_owner_raw"] == filtro_consultor
+if filtro_grupo != "Todos":
+    mask &= df["_group_raw"] == filtro_grupo
 
 df_filtered = df[mask].reset_index(drop=True)
 st.caption(f"{len(df_filtered)} proyectos encontrados")
@@ -212,7 +219,7 @@ st.caption(f"{len(df_filtered)} proyectos encontrados")
 st.divider()
 st.subheader("📊 Listado de proyectos")
 
-cols_show = ["Clave", "Proyecto", "Estado", "Consultor", "Plan", "Módulo", "Vendedor", "Empleados", "Tareas ✅", "Tareas 🔓", "Creado"]
+cols_show = ["Clave", "Proyecto", "Grupo", "Estado", "Consultor", "Plan", "Módulo", "Vendedor", "Empleados", "Tareas ✅", "Tareas 🔓", "Creado"]
 st.dataframe(
     df_filtered[cols_show],
     use_container_width=True,
