@@ -108,6 +108,17 @@ def fmt_date(d):
             pass
     return d
 
+def parse_date(d):
+    """Convierte string de fecha a objeto date, o None si no puede."""
+    if not d or d == "–":
+        return None
+    for fmt in ("%m-%d-%Y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(d, fmt).date()
+        except Exception:
+            pass
+    return None
+
 
 def build_df(projects):
     rows = []
@@ -129,15 +140,18 @@ def build_df(projects):
             "Grupo":        p.get("group_name", "–"),
             "Tareas ✅":    task_count.get("closed", 0),
             "Tareas 🔓":    task_count.get("open", 0),
-            "Creado":       fmt_date(p.get("created_date", "")),
-            "_id":          str(p.get("id", "")),
-            "_nombre_raw":  p.get("name", ""),
-            "_status_raw":  status_name,
-            "_plan_raw":    cf(cfields, "Plan Contratado", "plan_contratado"),
-            "_owner_raw":   p.get("owner_name", ""),
-            "_consultor_raw": cf(parse_custom_fields(p.get("custom_fields", [])), "Consultor 1"),
-            "_group_raw":   p.get("group_name", ""),
-            "_cfields":     cfields,
+            "Creado":            fmt_date(p.get("created_date", "")),
+            "Fecha Término":     fmt_date(p.get("end_date", "")),
+            "_id":               str(p.get("id", "")),
+            "_nombre_raw":       p.get("name", ""),
+            "_status_raw":       status_name,
+            "_plan_raw":         cf(cfields, "Plan Contratado", "plan_contratado"),
+            "_owner_raw":        p.get("owner_name", ""),
+            "_consultor_raw":    cf(parse_custom_fields(p.get("custom_fields", [])), "Consultor 1"),
+            "_group_raw":        p.get("group_name", ""),
+            "_end_date_raw":     p.get("end_date", ""),
+            "_ffact_raw":        cf(cfields, "Fecha Facturación", "Fecha Facturacion"),
+            "_cfields":          cfields,
         })
     return pd.DataFrame(rows)
 
@@ -212,6 +226,42 @@ with fc5:
     grupos_opts = sorted([x for x in df["_group_raw"].dropna().unique() if x])
     filtro_grupo = st.multiselect("Grupo", grupos_opts, placeholder="Todos")
 
+# Filtros de fecha — fila separada
+fd1, fd2, fd3, fd4 = st.columns(4)
+with fd1:
+    st.markdown("**📅 Fecha Término — rango**")
+with fd2:
+    term_desde = st.date_input("Desde", value=None, key="term_desde", label_visibility="collapsed")
+with fd3:
+    term_hasta = st.date_input("Hasta", value=None, key="term_hasta", label_visibility="collapsed")
+with fd4:
+    meses = ["", "Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+    anios = [""] + sorted(set(
+        str(parse_date(d).year) for d in df["_end_date_raw"] if parse_date(d)
+    ), reverse=True)
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        term_mes = st.selectbox("Mes término", meses, key="term_mes")
+    with tc2:
+        term_anio = st.selectbox("Año término", anios, key="term_anio")
+
+fe1, fe2, fe3, fe4 = st.columns(4)
+with fe1:
+    st.markdown("**📅 Fecha Facturación — rango**")
+with fe2:
+    fact_desde = st.date_input("Desde", value=None, key="fact_desde", label_visibility="collapsed")
+with fe3:
+    fact_hasta = st.date_input("Hasta", value=None, key="fact_hasta", label_visibility="collapsed")
+with fe4:
+    anios_fact = [""] + sorted(set(
+        str(parse_date(d).year) for d in df["_ffact_raw"] if parse_date(d)
+    ), reverse=True)
+    ff1, ff2 = st.columns(2)
+    with ff1:
+        fact_mes = st.selectbox("Mes facturación", meses, key="fact_mes")
+    with ff2:
+        fact_anio = st.selectbox("Año facturación", anios_fact, key="fact_anio")
+
 mask = pd.Series([True] * len(df))
 if search:
     mask &= (
@@ -227,6 +277,40 @@ if filtro_consultor != "Todos":
 if filtro_grupo:
     mask &= df["_group_raw"].isin(filtro_grupo)
 
+# Filtros fecha término
+if term_desde or term_hasta or term_mes or term_anio:
+    def match_term(raw):
+        d = parse_date(raw)
+        if d is None:
+            return False
+        if term_desde and d < term_desde:
+            return False
+        if term_hasta and d > term_hasta:
+            return False
+        if term_mes and d.month != meses.index(term_mes):
+            return False
+        if term_anio and str(d.year) != term_anio:
+            return False
+        return True
+    mask &= df["_end_date_raw"].apply(match_term)
+
+# Filtros fecha facturación
+if fact_desde or fact_hasta or fact_mes or fact_anio:
+    def match_fact(raw):
+        d = parse_date(raw)
+        if d is None:
+            return False
+        if fact_desde and d < fact_desde:
+            return False
+        if fact_hasta and d > fact_hasta:
+            return False
+        if fact_mes and d.month != meses.index(fact_mes):
+            return False
+        if fact_anio and str(d.year) != fact_anio:
+            return False
+        return True
+    mask &= df["_ffact_raw"].apply(match_fact)
+
 df_filtered = df[mask].reset_index(drop=True)
 st.caption(f"{len(df_filtered)} proyectos encontrados")
 
@@ -234,7 +318,7 @@ st.caption(f"{len(df_filtered)} proyectos encontrados")
 st.divider()
 st.subheader("📊 Listado de proyectos")
 
-cols_show = ["Clave", "Proyecto", "Grupo", "Estado", "Consultor", "Jefe de Proyecto", "Plan", "Vendedor", "Empleados", "Fecha Facturación", "Tareas ✅", "Tareas 🔓", "Creado"]
+cols_show = ["Clave", "Proyecto", "Grupo", "Estado", "Consultor", "Jefe de Proyecto", "Plan", "Vendedor", "Empleados", "Fecha Facturación", "Fecha Término", "Tareas ✅", "Tareas 🔓", "Creado"]
 st.dataframe(
     df_filtered[cols_show],
     use_container_width=True,
