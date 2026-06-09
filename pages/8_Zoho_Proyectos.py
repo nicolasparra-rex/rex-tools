@@ -70,25 +70,36 @@ def fmt_date(d):
     except Exception:
         return d
 
+def get_status_name(p):
+    """Extrae el nombre del estado sea dict o string."""
+    s = p.get("status", "")
+    if isinstance(s, dict):
+        return s.get("name", "–")
+    if isinstance(s, str) and s:
+        return s
+    return "–"
+
 def build_df(projects):
     rows = []
     for p in projects:
+        status_name = get_status_name(p)
+        task_count  = p.get("task_count", {}) or {}
         rows.append({
             "Clave":        p.get("id_string", ""),
             "Proyecto":     p.get("name", ""),
-            "Estado":       (status_icon(p.get("status", {}).get("name", "")) + " " + p.get("status", {}).get("name", "–")) if p.get("status") else "–",
+            "Estado":       status_icon(status_name) + " " + status_name,
             "Consultor":    p.get("owner_name", "–"),
-            "Plan":         p.get("custom_fields", {}).get("plan_contratado", p.get("plan_contratado", "–")),
-            "Empleados":    p.get("custom_fields", {}).get("cantidad_de_empleados", p.get("cantidad_de_empleados", "–")),
-            "Vendedor":     p.get("custom_fields", {}).get("vendedor", p.get("vendedor", "–")),
-            "Razón Social": p.get("custom_fields", {}).get("razon_social", p.get("razon_social", "")),
-            "Tareas ✅":    p.get("task_count", {}).get("closed", 0),
-            "Tareas 🔓":    p.get("task_count", {}).get("open", 0),
+            "Plan":         p.get("plan_contratado", "–"),
+            "Empleados":    p.get("cantidad_de_empleados", "–"),
+            "Vendedor":     p.get("vendedor", "–"),
+            "Razón Social": p.get("razon_social", ""),
+            "Tareas ✅":    task_count.get("closed", 0),
+            "Tareas 🔓":    task_count.get("open", 0),
             "Creado":       fmt_date(p.get("created_date", "")),
-            "_id":          p.get("id", ""),
+            "_id":          str(p.get("id", "")),
             "_nombre_raw":  p.get("name", ""),
-            "_status_raw":  p.get("status", {}).get("name", "") if p.get("status") else "",
-            "_plan_raw":    p.get("custom_fields", {}).get("plan_contratado", p.get("plan_contratado", "")),
+            "_status_raw":  status_name,
+            "_plan_raw":    p.get("plan_contratado", ""),
             "_owner_raw":   p.get("owner_name", ""),
         })
     return pd.DataFrame(rows)
