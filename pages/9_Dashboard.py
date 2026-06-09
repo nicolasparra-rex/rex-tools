@@ -183,16 +183,16 @@ _, tres_meses_ini = mes_rango(-2)  # fin del mes de hace 2 meses hacia atrás
 tres_meses_ini = mes_rango(-2)[0]  # inicio del mes de hace 2 meses
 
 # Grupos Rex+ para KPIs de cartera
-GRUPOS_REX = ["rex-proyectos vendedor rexmas", "rex-proyectos vendedor manager"]
-dff_rex = dff[dff["grupo"].str.lower().isin([g.lower() for g in GRUPOS_REX])]
+GRUPOS_REX = ["REX-SERVICIO ESPECIAL VENDEDOR REXMAS", "REX-SERVICIO ESPECIAL VENDEDOR MANAGER"]
+dff_rex = dff[dff["grupo"].isin(GRUPOS_REX)]
 
 # Status
 STATUS_DETENIDO = ["detenido por cliente", "detenido por comercial"]
 def es_detenido(s): return any(d in s.lower() for d in STATUS_DETENIDO)
 def es_activo(s):   return not es_detenido(s)
 
-activos   = dff_rex[dff_rex["status"].apply(es_activo)]
-detenidos = dff_rex[dff_rex["status"].apply(es_detenido)]
+activos   = dff_rex[dff_rex["status"].apply(es_activo)] if not dff_rex.empty else dff_rex
+detenidos = dff_rex[dff_rex["status"].apply(es_detenido)] if not dff_rex.empty else dff_rex
 total_rex = dff_rex
 
 emp_activos   = activos["empleados"].sum()
