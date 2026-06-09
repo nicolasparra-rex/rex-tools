@@ -97,6 +97,7 @@ def build_df(projects):
             "empleados":   empleados,
             "end_date":    end_date,
             "ffact":       ffact,
+            "created_date": parse_date(p.get("created_date", "")),
             "plan":        cf(cfields, "Plan Contratado"),
             "razon":       cf(cfields, "Razón social"),
         })
@@ -166,7 +167,6 @@ mes_actual = hoy.month
 anio_actual= hoy.year
 
 def mes_rango(offset=0):
-    """Devuelve (primer_dia, ultimo_dia) del mes actual + offset meses."""
     m = mes_actual + offset
     a = anio_actual
     while m > 12:
@@ -179,36 +179,37 @@ def mes_rango(offset=0):
 mes_ant_ini,  mes_ant_fin  = mes_rango(-1)
 mes_act_ini,  mes_act_fin  = mes_rango(0)
 mes_sig_ini,  mes_sig_fin  = mes_rango(1)
-tres_meses_ini = date(anio_actual, mes_actual, 1)
-if mes_actual - 2 < 1:
-    tres_meses_ini = date(anio_actual - 1, 12 + (mes_actual - 2), 1)
-else:
-    tres_meses_ini = date(anio_actual, mes_actual - 2, 1)
+_, tres_meses_ini = mes_rango(-2)  # fin del mes de hace 2 meses hacia atrás
+tres_meses_ini = mes_rango(-2)[0]  # inicio del mes de hace 2 meses
 
-# Clientes entrada (proyectos activos = status no detenido)
+# Grupos Rex+ para KPIs de cartera
+GRUPOS_REX = ["rex-proyectos vendedor rexmas", "rex-proyectos vendedor manager"]
+dff_rex = dff[dff["grupo"].str.lower().isin([g.lower() for g in GRUPOS_REX])]
+
+# Status
 STATUS_DETENIDO = ["detenido por cliente", "detenido por comercial"]
 def es_detenido(s): return any(d in s.lower() for d in STATUS_DETENIDO)
 def es_activo(s):   return not es_detenido(s)
 
-activos   = dff[dff["status"].apply(es_activo)]
-detenidos = dff[dff["status"].apply(es_detenido)]
-total_df  = dff
+activos   = dff_rex[dff_rex["status"].apply(es_activo)]
+detenidos = dff_rex[dff_rex["status"].apply(es_detenido)]
+total_rex = dff_rex
 
 emp_activos   = activos["empleados"].sum()
 emp_detenidos = detenidos["empleados"].sum()
-emp_total     = total_df["empleados"].sum()
+emp_total     = total_rex["empleados"].sum()
 
-# Últimos 3 meses (creación o facturación en ventana)
-ult3 = dff[dff["ffact"].apply(lambda d: d is not None and tres_meses_ini <= d <= hoy)]
+# Últimos 3 meses = proyectos creados en los últimos 3 meses
+ult3     = dff_rex[dff_rex["created_date"].apply(lambda d: d is not None and tres_meses_ini <= d <= hoy)]
 emp_ult3 = ult3["empleados"].sum()
 
-# Salidas planificadas por end_date
+# Salidas planificadas por end_date (sobre dff filtrado por usuario, no solo rex)
 def en_mes(d, ini, fin): return d is not None and ini <= d <= fin
 
-sal_ant     = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_ant_ini, mes_ant_fin))]
-sal_act     = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_act_ini, mes_act_fin))]
-sal_sig     = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_sig_ini, mes_sig_fin))]
-sal_sin_ag  = dff[dff["end_date"].isna() | dff["end_date"].isnull()]
+sal_ant    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_ant_ini, mes_ant_fin))]
+sal_act    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_act_ini, mes_act_fin))]
+sal_sig    = dff[dff["end_date"].apply(lambda d: en_mes(d, mes_sig_ini, mes_sig_fin))]
+sal_sin_ag = dff[dff["end_date"].isna() | dff["end_date"].isnull()]
 
 emp_sal_ant    = sal_ant["empleados"].sum()
 emp_sal_act    = sal_act["empleados"].sum()
