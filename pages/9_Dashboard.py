@@ -5,7 +5,20 @@ import json
 from datetime import datetime, date
 from calendar import monthrange
 
-st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Dashboard | Rex+ Tools", page_icon="📊", layout="wide")
+
+try:
+    from lib.branding import aplicar_branding, aplicar_footer, hero
+    BRANDING = True
+except ImportError:
+    BRANDING = False
+
+if BRANDING:
+    aplicar_branding(titulo_pagina="Dashboard", badge="PRODUCCIÓN")
+    hero("📊 Dashboard Rex+", "KPIs de cartera y salidas planificadas · datos en tiempo real")
+else:
+    st.title("📊 Dashboard Rex+")
+    st.caption("Datos en tiempo real desde Zoho Projects")
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 
@@ -107,9 +120,6 @@ def fmt_num(n):
     return f"{int(n):,}".replace(",", ".")
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-
-st.title("📊 Dashboard Rex+")
-st.caption("Datos en tiempo real desde Zoho Projects")
 
 portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
 

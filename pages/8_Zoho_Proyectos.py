@@ -4,9 +4,20 @@ import pandas as pd
 import json
 from datetime import datetime
 
-st.set_page_config(page_title="Zoho Proyectos", page_icon="📋", layout="wide")
+st.set_page_config(page_title="Zoho Proyectos | Rex+ Tools", page_icon="📋", layout="wide")
 
-# ── AUTENTICACIÓN ─────────────────────────────────────────────────────────────
+try:
+    from lib.branding import aplicar_branding, aplicar_footer, hero
+    BRANDING = True
+except ImportError:
+    BRANDING = False
+
+if BRANDING:
+    aplicar_branding(titulo_pagina="Zoho Proyectos", badge="PRODUCCIÓN")
+    hero("📋 Zoho Proyectos", "Proyectos activos del portal Rex+ · datos en tiempo real")
+else:
+    st.title("📋 Zoho Proyectos")
+    st.caption("Proyectos activos del portal Rex+ · datos en tiempo real")
 
 @st.cache_data(ttl=3000, show_spinner=False)
 def get_access_token(refresh_token, client_id, client_secret):
@@ -157,9 +168,6 @@ def build_df(projects):
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-
-st.title("📋 Zoho Proyectos")
-st.caption("Proyectos activos del portal Rex+ · datos en tiempo real")
 
 portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
 
