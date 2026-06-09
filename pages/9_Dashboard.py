@@ -233,7 +233,7 @@ with col_izq:
     r2c2.metric("Empleados",  fmt_num(emp_detenidos))
 
     r3c1, r3c2 = st.columns(2)
-    r3c1.metric("Total",     fmt_num(len(total_df)))
+    r3c1.metric("Total",     fmt_num(len(total_rex)))
     r3c2.metric("Empleados", fmt_num(emp_total))
 
     st.markdown("")
