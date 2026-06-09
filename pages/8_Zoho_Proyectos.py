@@ -187,8 +187,8 @@ fc1, fc2, fc3, fc4, fc5 = st.columns(5)
 with fc1:
     search = st.text_input("Buscar cliente o proyecto", placeholder="Nombre, razón social...")
 with fc2:
-    estados = ["Todos"] + sorted(df["_status_raw"].dropna().unique().tolist())
-    filtro_estado = st.selectbox("Estado", estados)
+    estados_opts = sorted(df["_status_raw"].dropna().unique().tolist())
+    filtro_estado = st.multiselect("Estado", estados_opts, placeholder="Todos")
 with fc3:
     planes = ["Todos"] + sorted([x for x in df["_plan_raw"].dropna().unique() if x and x != "–"])
     filtro_plan = st.selectbox("Plan", planes)
@@ -196,8 +196,8 @@ with fc4:
     consultores = ["Todos"] + sorted([x for x in df["_consultor_raw"].dropna().unique() if x and x != "–"])
     filtro_consultor = st.selectbox("Consultor", consultores)
 with fc5:
-    grupos = ["Todos"] + sorted([x for x in df["_group_raw"].dropna().unique() if x])
-    filtro_grupo = st.selectbox("Grupo", grupos)
+    grupos_opts = sorted([x for x in df["_group_raw"].dropna().unique() if x])
+    filtro_grupo = st.multiselect("Grupo", grupos_opts, placeholder="Todos")
 
 mask = pd.Series([True] * len(df))
 if search:
@@ -205,14 +205,14 @@ if search:
         df["_nombre_raw"].str.contains(search, case=False, na=False) |
         df["Razón Social"].str.contains(search, case=False, na=False)
     )
-if filtro_estado != "Todos":
-    mask &= df["_status_raw"] == filtro_estado
+if filtro_estado:
+    mask &= df["_status_raw"].isin(filtro_estado)
 if filtro_plan != "Todos":
     mask &= df["_plan_raw"] == filtro_plan
 if filtro_consultor != "Todos":
     mask &= df["_consultor_raw"] == filtro_consultor
-if filtro_grupo != "Todos":
-    mask &= df["_group_raw"] == filtro_grupo
+if filtro_grupo:
+    mask &= df["_group_raw"].isin(filtro_grupo)
 
 df_filtered = df[mask].reset_index(drop=True)
 st.caption(f"{len(df_filtered)} proyectos encontrados")
