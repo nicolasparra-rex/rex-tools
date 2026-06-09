@@ -26,11 +26,24 @@ def get_access_token(refresh_token, client_id, client_secret):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_projects(access_token, portal_id):
+    """Obtiene TODOS los proyectos activos paginando de 100 en 100."""
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
-    params = {"status": "active", "range": 100}
-    r = requests.get(url, headers=headers, params=params)
-    return r.json().get("projects", [])
+    all_projects = []
+    index = 1
+    while True:
+        params = {"status": "active", "range": 100, "index": index}
+        r = requests.get(url, headers=headers, params=params)
+        data = r.json()
+        batch = data.get("projects", [])
+        if not batch:
+            break
+        all_projects.extend(batch)
+        # Si trajo menos de 100, ya no hay más páginas
+        if len(batch) < 100:
+            break
+        index += 100
+    return all_projects
 
 
 @st.cache_data(ttl=600, show_spinner=False)
