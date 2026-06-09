@@ -7,26 +7,26 @@ st.set_page_config(page_title="Zoho Proyectos", page_icon="📋", layout="wide")
 
 # ── AUTENTICACIÓN ─────────────────────────────────────────────────────────────
 
-def get_access_token():
-    """Obtiene un Access Token fresco usando el Refresh Token."""
+@st.cache_data(ttl=3000, show_spinner=False)
+def get_access_token(refresh_token, client_id, client_secret):
+    """Obtiene un Access Token. Cacheado 50 min (el token expira en 60)."""
     url = "https://accounts.zoho.com/oauth/v2/token"
     params = {
-        "refresh_token": st.secrets["ZOHO_REFRESH_TOKEN"],
-        "client_id":     st.secrets["ZOHO_CLIENT_ID"],
-        "client_secret": st.secrets["ZOHO_CLIENT_SECRET"],
+        "refresh_token": refresh_token,
+        "client_id":     client_id,
+        "client_secret": client_secret,
         "grant_type":    "refresh_token",
     }
     r = requests.post(url, params=params)
     data = r.json()
     if "access_token" in data:
         return data["access_token"]
-    st.error(f"❌ Error al obtener token: {data}")
     return None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_projects(access_token, portal_id):
-    """Obtiene todos los proyectos activos del portal."""
+    """Obtiene todos los proyectos activos. Cacheado 10 minutos."""
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     params = {"status": "active", "range": 100}
@@ -35,9 +35,9 @@ def get_projects(access_token, portal_id):
     return data.get("projects", [])
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_tasks(access_token, portal_id, project_id):
-    """Obtiene las tareas de un proyecto."""
+    """Obtiene las tareas de un proyecto. Cacheado 10 minutos."""
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/{project_id}/tasks/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     params = {"range": 100}
@@ -49,18 +49,27 @@ def get_tasks(access_token, portal_id, project_id):
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
 STATUS_COLORS = {
-    "Inicio sin agenda": "🟠",
-    "En curso":          "🔵",
-    "Reunion KO":        "🟣",
-    "Completado":        "🟢",
-    "Cerrado":           "⚫",
+    "inicio sin agenda": "🟠",
+    "en curso":          "🔵",
+    "reunion ko":        "🟣",
+    "completado":        "🟢",
+    "cerrado":           "⚫",
 }
 
 def status_icon(name):
+    key = (name or "").lower()
     for k, v in STATUS_COLORS.items():
-        if k.lower() in (name or "").lower():
+        if k in key:
             return v
     return "⚪"
+
+def get_status_name(p):
+    s = p.get("status", "")
+    if isinstance(s, dict):
+        return s.get("name", "–")
+    if isinstance(s, str) and s:
+        return s
+    return "–"
 
 def fmt_date(d):
     if not d:
@@ -69,15 +78,6 @@ def fmt_date(d):
         return datetime.strptime(d, "%m-%d-%Y").strftime("%d/%m/%Y")
     except Exception:
         return d
-
-def get_status_name(p):
-    """Extrae el nombre del estado sea dict o string."""
-    s = p.get("status", "")
-    if isinstance(s, dict):
-        return s.get("name", "–")
-    if isinstance(s, str) and s:
-        return s
-    return "–"
 
 def build_df(projects):
     rows = []
@@ -112,19 +112,25 @@ st.caption("Proyectos activos del portal Rex+ · datos en tiempo real")
 
 portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
 
-# Botón de refresco
 col_title, col_btn = st.columns([6, 1])
 with col_btn:
     if st.button("🔄 Actualizar", use_container_width=True):
         st.cache_data.clear()
+        st.rerun()
 
-# Obtener token y proyectos
+# Obtener token
 with st.spinner("Conectando con Zoho Projects..."):
-    token = get_access_token()
+    token = get_access_token(
+        st.secrets["ZOHO_REFRESH_TOKEN"],
+        st.secrets["ZOHO_CLIENT_ID"],
+        st.secrets["ZOHO_CLIENT_SECRET"],
+    )
 
 if not token:
+    st.error("❌ No se pudo obtener el token. Revisa los secrets en Streamlit.")
     st.stop()
 
+# Obtener proyectos
 with st.spinner("Cargando proyectos..."):
     projects = get_projects(token, portal_id)
 
@@ -136,18 +142,18 @@ df = build_df(projects)
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.divider()
-total       = len(df)
-sin_agenda  = df["_status_raw"].str.contains("Inicio sin agenda", case=False, na=False).sum()
-en_curso    = df["_status_raw"].str.contains("En curso", case=False, na=False).sum()
-otros       = total - sin_agenda - en_curso
-tareas_open = df["Tareas 🔓"].sum()
+total      = len(df)
+sin_agenda = df["_status_raw"].str.lower().str.contains("inicio sin agenda", na=False).sum()
+en_curso   = df["_status_raw"].str.lower().str.contains("en curso", na=False).sum()
+otros      = total - sin_agenda - en_curso
+t_abiertas = int(df["Tareas 🔓"].sum())
 
 k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Total proyectos", total)
 k2.metric("Sin agendar 🟠", int(sin_agenda))
 k3.metric("En curso 🔵", int(en_curso))
 k4.metric("Otras etapas", int(otros))
-k5.metric("Tareas abiertas", int(tareas_open))
+k5.metric("Tareas abiertas", t_abiertas)
 
 st.divider()
 
@@ -157,20 +163,16 @@ fc1, fc2, fc3, fc4 = st.columns(4)
 
 with fc1:
     search = st.text_input("Buscar cliente o proyecto", placeholder="Nombre, razón social...")
-
 with fc2:
     estados = ["Todos"] + sorted(df["_status_raw"].dropna().unique().tolist())
     filtro_estado = st.selectbox("Estado", estados)
-
 with fc3:
-    planes = ["Todos"] + sorted(df["_plan_raw"].dropna().replace("", pd.NA).dropna().unique().tolist())
+    planes = ["Todos"] + sorted([x for x in df["_plan_raw"].dropna().unique() if x])
     filtro_plan = st.selectbox("Plan", planes)
-
 with fc4:
     consultores = ["Todos"] + sorted(df["_owner_raw"].dropna().unique().tolist())
     filtro_consultor = st.selectbox("Consultor", consultores)
 
-# Aplicar filtros
 mask = pd.Series([True] * len(df))
 if search:
     mask &= (
@@ -185,7 +187,6 @@ if filtro_consultor != "Todos":
     mask &= df["_owner_raw"] == filtro_consultor
 
 df_filtered = df[mask].reset_index(drop=True)
-
 st.caption(f"{len(df_filtered)} proyectos encontrados")
 
 # ── TABLA ─────────────────────────────────────────────────────────────────────
@@ -198,11 +199,11 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
     column_config={
-        "Clave":      st.column_config.TextColumn(width="small"),
-        "Proyecto":   st.column_config.TextColumn(width="large"),
-        "Estado":     st.column_config.TextColumn(width="medium"),
-        "Tareas ✅":  st.column_config.NumberColumn(width="small"),
-        "Tareas 🔓":  st.column_config.NumberColumn(width="small"),
+        "Clave":     st.column_config.TextColumn(width="small"),
+        "Proyecto":  st.column_config.TextColumn(width="large"),
+        "Estado":    st.column_config.TextColumn(width="medium"),
+        "Tareas ✅": st.column_config.NumberColumn(width="small"),
+        "Tareas 🔓": st.column_config.NumberColumn(width="small"),
     }
 )
 
@@ -216,52 +217,51 @@ selected = st.selectbox("Proyecto", project_names, label_visibility="collapsed")
 if selected != "Selecciona un proyecto...":
     row = df_filtered[df_filtered["Proyecto"] == selected].iloc[0]
     project_id = row["_id"]
-
-    # Buscar datos completos del proyecto original
-    proj_data = next((p for p in projects if str(p.get("id")) == str(project_id)), {})
+    proj_data  = next((p for p in projects if str(p.get("id")) == project_id), {})
 
     d1, d2, d3 = st.columns(3)
     with d1:
         st.markdown("**Razón social**")
-        st.write(proj_data.get("razon_social") or row.get("Razón Social") or "–")
+        st.write(proj_data.get("razon_social") or "–")
         st.markdown("**RUT**")
-        st.write(proj_data.get("rut_empresa", "–"))
+        st.write(proj_data.get("rut_empresa") or "–")
         st.markdown("**Contacto**")
-        st.write(proj_data.get("nombre_del_contacto", "–"))
-
+        st.write(proj_data.get("nombre_del_contacto") or "–")
     with d2:
         st.markdown("**Plan contratado**")
-        st.write(proj_data.get("plan_contratado", row["Plan"]) or "–")
+        st.write(proj_data.get("plan_contratado") or "–")
         st.markdown("**Módulos vendidos**")
         modulos = proj_data.get("modulo_vendido", [])
-        st.write(", ".join(modulos) if isinstance(modulos, list) else str(modulos) or "–")
+        st.write(", ".join(modulos) if isinstance(modulos, list) else str(modulos or "–"))
         st.markdown("**Vendedor**")
-        st.write(proj_data.get("vendedor", row["Vendedor"]) or "–")
-
+        st.write(proj_data.get("vendedor") or "–")
     with d3:
         st.markdown("**Empleados**")
-        st.write(proj_data.get("cantidad_de_empleados", row["Empleados"]) or "–")
+        st.write(proj_data.get("cantidad_de_empleados") or "–")
         st.markdown("**Empresas**")
-        st.write(proj_data.get("cantidad_de_empresas", "–"))
+        st.write(proj_data.get("cantidad_de_empresas") or "–")
         st.markdown("**Fecha venta**")
-        st.write(proj_data.get("fecha_de_venta", "–"))
+        st.write(proj_data.get("fecha_de_venta") or "–")
 
     # Tareas
     st.markdown("---")
     st.markdown("**🗂️ Tareas del proyecto**")
-
     with st.spinner("Cargando tareas..."):
         tasks = get_tasks(token, portal_id, project_id)
 
     if tasks:
         task_rows = []
         for t in tasks:
+            s = t.get("status", {})
+            status_t = s.get("name", "–") if isinstance(s, dict) else str(s or "–")
+            owners = t.get("details", {}).get("owners", []) if t.get("details") else []
+            responsable = owners[0].get("name", "–") if owners else "–"
             task_rows.append({
-                "Tarea":    t.get("name", ""),
-                "Estado":   t.get("status", {}).get("name", "–") if t.get("status") else "–",
-                "% avance": t.get("percent_complete", 0),
-                "Responsable": t.get("details", {}).get("owners", [{}])[0].get("name", "–") if t.get("details", {}).get("owners") else "–",
-                "Vencimiento": fmt_date(t.get("end_date", "")),
+                "Tarea":        t.get("name", ""),
+                "Estado":       status_t,
+                "% avance":     int(t.get("percent_complete", 0) or 0),
+                "Responsable":  responsable,
+                "Vencimiento":  fmt_date(t.get("end_date", "")),
             })
         df_tasks = pd.DataFrame(task_rows)
         st.dataframe(
