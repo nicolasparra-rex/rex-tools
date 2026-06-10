@@ -40,6 +40,29 @@ def get_access_token(refresh_token, client_id, client_secret):
     return r.json().get("access_token")
 
 @st.cache_data(ttl=600, show_spinner=False)
+def buscar_proyecto_por_ot(access_token, portal_id, ot):
+    """Busca un proyecto cuyo key o nombre contenga la OT."""
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
+        batch = r.json().get("projects", [])
+        if not batch:
+            break
+        for p in batch:
+            key      = p.get("key", "").upper()
+            name     = p.get("name", "").upper()
+            ot_upper = ot.strip().upper()
+            if ot_upper == key or ot_upper in name:
+                return p
+        if len(batch) < 100:
+            break
+        index += 100
+    return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def listar_ots_en_curso(access_token, portal_id):
     """Retorna proyectos en estados relevantes para Minutas."""
     ESTADOS = ["inicio sin agenda", "reunion ko", "reunión ko", "agenda por confirmar"]
@@ -514,7 +537,7 @@ with tab_asi:
                     on_select="rerun",
                     selection_mode="single-row",
                     column_config={
-                        "OT":      st.column_config.TextColumn(width="small"),
+                        "OT":       st.column_config.TextColumn(width="small"),
                         "Proyecto": st.column_config.TextColumn(width="large"),
                     },
                     key="asi_tabla_ots"
@@ -528,9 +551,38 @@ with tab_asi:
             else:
                 st.info("No hay proyectos en este estado.")
 
-    # Si viene OT desde selección de tabla, inyectarla antes del campo
+    # Inyectar OT seleccionada
     if st.session_state.get("ot_seleccionada"):
         st.session_state["r_ot"] = st.session_state.pop("ot_seleccionada")
+
+    # Obtener datos Zoho usando la OT del tab Remuneraciones (compartida)
+    ot_asi = st.session_state.get("r_ot", "")
+    if ot_asi and ot_asi != st.session_state.get("last_ot", "") and ZOHO_OK:
+        with st.spinner(f"🔍 Buscando OT {ot_asi} en Zoho..."):
+            proyecto_a = buscar_proyecto_por_ot(token, portal_id, ot_asi)
+        if proyecto_a:
+            datos_a = extraer_datos_zoho(proyecto_a)
+            st.session_state.zoho_data   = datos_a
+            st.session_state["last_ot"]  = ot_asi
+            st.session_state["a_empresa"]      = datos_a.get("empresa", "")
+            st.session_state["a_rut"]          = datos_a.get("rut", "")
+            st.session_state["a_jefe_proyecto"]= datos_a.get("jefe_proyecto", "")
+            st.session_state["a_direccion"]    = datos_a.get("direccion", "")
+            st.session_state["a_cont_email"]   = datos_a.get("correo", "")
+            st.session_state["a_cont_num"]     = datos_a.get("telefono", "")
+            st.session_state["a_cont_nombre"]  = datos_a.get("contacto", "")
+            st.session_state["zoho_msg"]       = ("ok", f"✅ Proyecto encontrado: **{proyecto_a.get('name', '')}**")
+            st.rerun()
+
+    # Mostrar mensaje
+    if st.session_state.get("zoho_msg"):
+        tipo, msg = st.session_state["zoho_msg"]
+        if tipo == "ok":
+            st.success(msg)
+        else:
+            st.warning(msg)
+
+    vendedor_z = z("vendedor")
 
     c5, c6 = st.columns(2)
     empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
