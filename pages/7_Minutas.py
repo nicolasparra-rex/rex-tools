@@ -41,7 +41,6 @@ def get_access_token(refresh_token, client_id, client_secret):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def buscar_proyecto_por_ot(access_token, portal_id, ot):
-    """Busca un proyecto cuyo key o nombre contenga la OT."""
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     index = 1
@@ -51,20 +50,16 @@ def buscar_proyecto_por_ot(access_token, portal_id, ot):
         if not batch:
             break
         for p in batch:
-            key      = p.get("key", "").upper()
-            name     = p.get("name", "").upper()
             ot_upper = ot.strip().upper()
-            if ot_upper == key or ot_upper in name:
+            if ot_upper == p.get("key", "").upper() or ot_upper in p.get("name", "").upper():
                 return p
         if len(batch) < 100:
             break
         index += 100
     return None
 
-
 @st.cache_data(ttl=600, show_spinner=False)
-def listar_ots_en_curso(access_token, portal_id):
-    """Retorna proyectos en estados relevantes para Minutas."""
+def listar_ots_activas(access_token, portal_id):
     ESTADOS = ["inicio sin agenda", "reunion ko", "reunión ko", "agenda por confirmar"]
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
@@ -89,25 +84,6 @@ def listar_ots_en_curso(access_token, portal_id):
             break
         index += 100
     return rows
-    """Busca un proyecto cuyo key o nombre contenga la OT."""
-    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
-    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
-    index = 1
-    while True:
-        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
-        if not batch:
-            break
-        for p in batch:
-            key  = p.get("key", "").upper()
-            name = p.get("name", "").upper()
-            ot_upper = ot.strip().upper()
-            if ot_upper == key or ot_upper in name:
-                return p
-        if len(batch) < 100:
-            break
-        index += 100
-    return None
 
 def parse_custom_fields(custom_fields):
     result = {}
@@ -133,23 +109,22 @@ def cf(fields, *keys):
     return ""
 
 def extraer_datos_zoho(proyecto):
-    """Extrae campos del proyecto Zoho y los mapea al formulario."""
     if not proyecto:
         return {}
     cfields = parse_custom_fields(proyecto.get("custom_fields", []))
     return {
-        "empresa":        cf(cfields, "Razón social"),
-        "rut":            cf(cfields, "RUT Empresa"),
-        "vendedor":       cf(cfields, "Vendedor"),
-        "jefe_proyecto":  proyecto.get("owner_name", ""),
-        "direccion":      cf(cfields, "Dirección"),
-        "correo":         cf(cfields, "Correo del contacto"),
-        "telefono":       cf(cfields, "Telefono de contacto"),
-        "plan":           cf(cfields, "Plan Contratado"),
-        "colaboradores":  cf(cfields, "Cantidad de empleados"),
-        "razones":        cf(cfields, "Cantidad de empresas"),
-        "empresa_venta":  cf(cfields, "Empresa Venta"),
-        "contacto":       cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
+        "empresa":       cf(cfields, "Razón social"),
+        "rut":           cf(cfields, "RUT Empresa"),
+        "vendedor":      cf(cfields, "Vendedor"),
+        "jefe_proyecto": proyecto.get("owner_name", ""),
+        "direccion":     cf(cfields, "Dirección"),
+        "correo":        cf(cfields, "Correo del contacto"),
+        "telefono":      cf(cfields, "Telefono de contacto"),
+        "plan":          cf(cfields, "Plan Contratado"),
+        "colaboradores": cf(cfields, "Cantidad de empleados"),
+        "razones":       cf(cfields, "Cantidad de empresas"),
+        "empresa_venta": cf(cfields, "Empresa Venta"),
+        "contacto":      cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
     }
 
 # ── EXCEL HELPERS ─────────────────────────────────────────────────────────────
@@ -163,9 +138,8 @@ COLOR_CHECK2   = "E8F5E9"
 WHITE          = "FFFFFF"
 FONT_WHITE     = "FFFFFF"
 FONT_DARK      = "1A3A5F"
-
-SI_NO  = ["si", "no", "No aplica"]
-SI_NO2 = ["si", "no"]
+SI_NO          = ["si", "no", "No aplica"]
+SI_NO2         = ["si", "no"]
 
 def _fill(hex_color):
     return PatternFill("solid", fgColor=hex_color)
@@ -336,7 +310,7 @@ def generar_excel(data_rem, data_asi):
     buf.seek(0)
     return buf.read()
 
-# ── ZOHO: obtener token y buscar proyecto ─────────────────────────────────────
+# ── ZOHO: token ───────────────────────────────────────────────────────────────
 
 VENDEDORES = ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo Verdejo',
               'Francisca Soto', 'Francisco Reig', 'Gislaine Sepulveda', 'Gonzalo Pereira',
@@ -357,15 +331,34 @@ except Exception:
     token = None
     ZOHO_OK = False
 
-# ── SESSION STATE para datos Zoho ─────────────────────────────────────────────
-if "zoho_data" not in st.session_state:
-    st.session_state.zoho_data = {}
-if "last_ot" not in st.session_state:
-    st.session_state.last_ot = ""
+# ── SESSION STATE ─────────────────────────────────────────────────────────────
+for k, v in {"zoho_data": {}, "last_ot": "", "zoho_msg": ()}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 def z(key, default=""):
-    """Retorna valor desde Zoho si existe, si no el default."""
     return st.session_state.zoho_data.get(key, default)
+
+def panel_ots(key_busq, key_tabla):
+    """Panel ayuda memoria OTs activas — solo lectura."""
+    if not ZOHO_OK:
+        return
+    with st.expander("📋 Ver OTs activas (Inicio sin agenda / Reunión KO / Agenda por confirmar)", expanded=False):
+        with st.spinner("Cargando OTs..."):
+            ots = listar_ots_activas(token, portal_id)
+        if ots:
+            busq = st.text_input("🔍 Filtrar", placeholder="Buscar OT, nombre o consultor...", key=key_busq)
+            df_ots = pd.DataFrame(ots)
+            if busq:
+                mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
+                df_ots = df_ots[mask].reset_index(drop=True)
+            st.dataframe(df_ots, use_container_width=True, hide_index=True,
+                         column_config={"OT": st.column_config.TextColumn(width="small"),
+                                        "Proyecto": st.column_config.TextColumn(width="large")},
+                         key=key_tabla)
+            st.caption(f"{len(df_ots)} proyectos · copia la OT y pégala en el campo de abajo")
+        else:
+            st.info("No hay proyectos en estos estados.")
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
@@ -374,56 +367,19 @@ tab_rem, tab_asi = st.tabs(["📊 Remuneraciones", "🕐 Asistencia"])
 with tab_rem:
     st.subheader("Datos Generales del Cliente")
 
-    # ── Ayuda memoria OTs ─────────────────────────────────────────────────────
-    if ZOHO_OK:
-        with st.expander("📋 Ver OTs en curso — haz clic en una fila para autocompletar", expanded=False):
-            with st.spinner("Cargando OTs..."):
-                ots = listar_ots_en_curso(token, portal_id)
-            if ots:
-                busq = st.text_input("🔍 Filtrar", placeholder="Buscar por OT, nombre o consultor...", key="rem_busq_ot")
-                df_ots = pd.DataFrame(ots)
-                if busq:
-                    mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
-                    df_ots = df_ots[mask].reset_index(drop=True)
-                seleccion = st.dataframe(
-                    df_ots,
-                    use_container_width=True,
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    column_config={
-                        "OT":       st.column_config.TextColumn(width="small"),
-                        "Proyecto": st.column_config.TextColumn(width="large"),
-                    },
-                    key="rem_tabla_ots"
-                )
-                filas = seleccion.selection.get("rows", [])
-                if filas:
-                    ot_sel = df_ots.iloc[filas[0]]["OT"]
-                    # Guardar en key intermedia y limpiar last_ot para forzar búsqueda
-                    st.session_state["ot_seleccionada"] = ot_sel
-                    st.session_state["last_ot"] = ""
-                st.caption(f"{len(df_ots)} proyectos · haz clic en una fila para seleccionar")
-            else:
-                st.info("No hay proyectos en este estado.")
-
-    # Si viene OT desde selección de tabla, inyectarla antes de renderizar el campo
-    if st.session_state.get("ot_seleccionada"):
-        st.session_state["r_ot"] = st.session_state.pop("ot_seleccionada")
+    panel_ots("rem_busq_ot", "rem_tabla_ots")
 
     c1, c2 = st.columns(2)
 
-    # OT — al escribir dispara búsqueda en Zoho
-    ot = c1.text_input("OT (Orden de Trabajo)", placeholder="Ej: 2757", key="r_ot")
+    ot = c1.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910", key="r_ot")
 
     if ot and ot != st.session_state.last_ot and ZOHO_OK:
         with st.spinner(f"🔍 Buscando OT {ot} en Zoho..."):
             proyecto = buscar_proyecto_por_ot(token, portal_id, ot)
         if proyecto:
             datos = extraer_datos_zoho(proyecto)
-            st.session_state.zoho_data = datos
-            st.session_state.last_ot   = ot
-            # Escribir directo en los keys de session_state para forzar actualización
+            st.session_state.zoho_data  = datos
+            st.session_state.last_ot    = ot
             st.session_state["r_empresa"]       = datos.get("empresa", "")
             st.session_state["r_rut"]           = datos.get("rut", "")
             st.session_state["r_jefe_proyecto"] = datos.get("jefe_proyecto", "")
@@ -440,14 +396,13 @@ with tab_rem:
             st.session_state["zoho_msg"]        = ("ok", f"✅ Proyecto encontrado: **{proyecto.get('name', '')}**")
             st.rerun()
         else:
-            st.session_state.zoho_data = {}
-            st.session_state.last_ot   = ot
-            st.session_state["zoho_msg"] = ("warn", f"⚠️ No se encontró proyecto con OT **{ot}** en Zoho.")
+            st.session_state.zoho_data  = {}
+            st.session_state.last_ot    = ot
+            st.session_state["zoho_msg"] = ("warn", f"⚠️ No se encontró proyecto con OT **{ot}**.")
             st.rerun()
 
-    # Mostrar mensaje tras rerun
-    if "zoho_msg" in st.session_state:
-        tipo, msg = st.session_state["zoho_msg"]
+    if st.session_state.zoho_msg:
+        tipo, msg = st.session_state.zoho_msg
         if tipo == "ok":
             st.success(msg)
         else:
@@ -455,32 +410,27 @@ with tab_rem:
 
     empresa_r       = c1.text_input("Empresa / Razón Social", placeholder="Ej: Fundación Ejemplo", key="r_empresa")
     rut_r           = c1.text_input("RUT Empresa", placeholder="Ej: 65058734-0", key="r_rut")
-
-    # Vendedor: intentar preseleccionar desde Zoho
-    vendedor_z = z("vendedor")
-    v_idx = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
-    vendedor_r = c1.selectbox("Vendedor", VENDEDORES, index=v_idx, key="r_vendedor")
-
+    vendedor_z      = z("vendedor")
+    v_idx           = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
+    vendedor_r      = c1.selectbox("Vendedor", VENDEDORES, index=v_idx, key="r_vendedor")
     jefe_proyecto_r = c2.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="r_jefe_proyecto")
     direccion_r     = c2.text_input("Dirección", placeholder="Ej: Av. Principal 123", key="r_direccion")
     correo_r        = c2.text_input("Correo de Contacto", placeholder="correo@empresa.cl", key="r_correo")
     telefono_r      = c2.text_input("Número de Contacto", placeholder="Ej: 56912345678", key="r_telefono")
-
-    PLANES_R = ["Express (0-100 colab)", "Base (101-200 colab)",
-                "Estandar (201-800 colab)", "Full (801-3000 colab)", "Mega Full (3001+)"]
-    plan_z = z("plan")
-    plan_idx = next((i for i, p in enumerate(PLANES_R) if plan_z.lower() in p.lower()), 0)
-    plan_r = c2.selectbox("Plan Contratado", PLANES_R, index=plan_idx, key="r_plan")
-
-    col_r, col_rs = st.columns(2)
-    colab_z = z("colaboradores")
+    PLANES_R        = ["Express (0-100 colab)", "Base (101-200 colab)",
+                       "Estandar (201-800 colab)", "Full (801-3000 colab)", "Mega Full (3001+)"]
+    plan_z          = z("plan")
+    plan_idx        = next((i for i, p in enumerate(PLANES_R) if plan_z.lower() in p.lower()), 0)
+    plan_r          = c2.selectbox("Plan Contratado", PLANES_R, index=plan_idx, key="r_plan")
+    col_r, col_rs   = st.columns(2)
+    colab_z         = z("colaboradores")
     colaboradores_r = col_r.number_input("Cantidad de Colaboradores", min_value=1,
                                           value=max(1, int(colab_z) if str(colab_z).isdigit() else 1),
                                           step=1, key="r_colab")
-    razones_z = z("razones")
-    razones_r = col_rs.number_input("Cantidad de Razones Sociales", min_value=1,
-                                     value=max(1, int(razones_z) if str(razones_z).isdigit() else 1),
-                                     step=1, key="r_razones")
+    razones_z       = z("razones")
+    razones_r       = col_rs.number_input("Cantidad de Razones Sociales", min_value=1,
+                                           value=max(1, int(razones_z) if str(razones_z).isdigit() else 1),
+                                           step=1, key="r_razones")
 
     st.divider()
     st.subheader("Configuración de Remuneraciones")
@@ -498,17 +448,15 @@ with tab_rem:
                                      "D365", "otro", "no aplica"], key="r_central")
     if centralizacion_r == "otro":
         centralizacion_r = c4.text_input("¿Cuál sistema contable?", placeholder="Escribe el sistema...", key="r_central_otro")
-    BANCOS = [
-        "Banco BCI", "Banco BICE", "Banco Consorcio", "Banco Coopeuch",
-        "Banco de Chile", "Banco del Estado de Chile", "Banco Edwards",
-        "Banco Falabella", "Banco Internacional", "Banco ITAU", "Banco Ripley",
-        "Banco Santander Chile", "Banco Security", "BBVA", "Citibank",
-        "Corpbanca", "Global 66", "HSBC Bank Chile", "Mach", "Mercado Pago",
-        "Prex Chile", "Scotiabank", "Tenpo", "Los Heroes", "Sin Banco",
-    ]
-    bancos_sel = st.multiselect("Transferencia Bancaria", BANCOS, key="r_transfer")
+    BANCOS = ["Banco BCI", "Banco BICE", "Banco Consorcio", "Banco Coopeuch",
+              "Banco de Chile", "Banco del Estado de Chile", "Banco Edwards",
+              "Banco Falabella", "Banco Internacional", "Banco ITAU", "Banco Ripley",
+              "Banco Santander Chile", "Banco Security", "BBVA", "Citibank",
+              "Corpbanca", "Global 66", "HSBC Bank Chile", "Mach", "Mercado Pago",
+              "Prex Chile", "Scotiabank", "Tenpo", "Los Heroes", "Sin Banco"]
+    bancos_sel      = st.multiselect("Transferencia Bancaria", BANCOS, key="r_transfer")
     transferencia_r = ", ".join(bancos_sel) if bancos_sel else ""
-    usa_api_r = c4.selectbox("¿Utiliza API?", ["no", "si"], key="r_api")
+    usa_api_r       = c4.selectbox("¿Utiliza API?", ["no", "si"], key="r_api")
 
     st.divider()
     st.subheader("Comentarios Generales")
@@ -519,100 +467,42 @@ with tab_rem:
 with tab_asi:
     st.subheader("Datos de la Empresa")
 
-    # ── Ayuda memoria OTs ─────────────────────────────────────────────────────
-    if ZOHO_OK:
-        with st.expander("📋 Ver OTs en curso", expanded=False):
-            with st.spinner("Cargando OTs..."):
-                ots_a = listar_ots_en_curso(token, portal_id)
-            if ots_a:
-                busq_a = st.text_input("🔍 Filtrar", placeholder="Buscar por OT, nombre o consultor...", key="asi_busq_ot")
-                df_ots_a = pd.DataFrame(ots_a)
-                if busq_a:
-                    mask_a = df_ots_a.apply(lambda row: row.astype(str).str.contains(busq_a, case=False).any(), axis=1)
-                    df_ots_a = df_ots_a[mask_a].reset_index(drop=True)
-                seleccion_a = st.dataframe(
-                    df_ots_a,
-                    use_container_width=True,
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    column_config={
-                        "OT":       st.column_config.TextColumn(width="small"),
-                        "Proyecto": st.column_config.TextColumn(width="large"),
-                    },
-                    key="asi_tabla_ots"
-                )
-                filas_a = seleccion_a.selection.get("rows", [])
-                if filas_a:
-                    ot_sel_a = df_ots_a.iloc[filas_a[0]]["OT"]
-                    st.session_state["ot_seleccionada"] = ot_sel_a
-                    st.session_state["last_ot"] = ""
-                st.caption(f"{len(df_ots_a)} proyectos · haz clic en una fila para seleccionar")
-            else:
-                st.info("No hay proyectos en este estado.")
+    panel_ots("asi_busq_ot", "asi_tabla_ots")
 
-    # Inyectar OT seleccionada
-    if st.session_state.get("ot_seleccionada"):
-        st.session_state["r_ot"] = st.session_state.pop("ot_seleccionada")
-
-    # Obtener datos Zoho usando la OT del tab Remuneraciones (compartida)
-    ot_asi = st.session_state.get("r_ot", "")
-    if ot_asi and ot_asi != st.session_state.get("last_ot", "") and ZOHO_OK:
-        with st.spinner(f"🔍 Buscando OT {ot_asi} en Zoho..."):
-            proyecto_a = buscar_proyecto_por_ot(token, portal_id, ot_asi)
-        if proyecto_a:
-            datos_a = extraer_datos_zoho(proyecto_a)
-            st.session_state.zoho_data   = datos_a
-            st.session_state["last_ot"]  = ot_asi
-            st.session_state["a_empresa"]      = datos_a.get("empresa", "")
-            st.session_state["a_rut"]          = datos_a.get("rut", "")
-            st.session_state["a_jefe_proyecto"]= datos_a.get("jefe_proyecto", "")
-            st.session_state["a_direccion"]    = datos_a.get("direccion", "")
-            st.session_state["a_cont_email"]   = datos_a.get("correo", "")
-            st.session_state["a_cont_num"]     = datos_a.get("telefono", "")
-            st.session_state["a_cont_nombre"]  = datos_a.get("contacto", "")
-            st.session_state["zoho_msg"]       = ("ok", f"✅ Proyecto encontrado: **{proyecto_a.get('name', '')}**")
-            st.rerun()
-
-    # Mostrar mensaje
-    if st.session_state.get("zoho_msg"):
-        tipo, msg = st.session_state["zoho_msg"]
+    if st.session_state.zoho_msg:
+        tipo, msg = st.session_state.zoho_msg
         if tipo == "ok":
             st.success(msg)
         else:
             st.warning(msg)
 
-    vendedor_z = z("vendedor")
-
     c5, c6 = st.columns(2)
+    vendedor_z      = z("vendedor")
     empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
     rut_a           = c5.text_input("RUT", placeholder="Ej: 69091300-3", key="a_rut")
     jefe_proyecto_a = c5.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="a_jefe_proyecto")
     direccion_a     = c5.text_input("Dirección", placeholder="Ej: Maria Errazuriz 1507", key="a_direccion")
-
-    v_idx_a = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
-    vendedor_a = c5.selectbox("Vendedor", VENDEDORES, index=v_idx_a, key="a_vendedor")
-
-    EMP_VENTA = ["REX", "Visma", "Manager", "Otro"]
-    emp_venta_z = z("empresa_venta")
-    ev_idx = EMP_VENTA.index(emp_venta_z) if emp_venta_z in EMP_VENTA else 0
+    v_idx_a         = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
+    vendedor_a      = c5.selectbox("Vendedor", VENDEDORES, index=v_idx_a, key="a_vendedor")
+    EMP_VENTA       = ["REX", "Visma", "Manager", "Otro"]
+    emp_venta_z     = z("empresa_venta")
+    ev_idx          = EMP_VENTA.index(emp_venta_z) if emp_venta_z in EMP_VENTA else 0
     empresa_venta_a = c6.selectbox("Empresa Venta", EMP_VENTA, index=ev_idx, key="a_emp_venta")
-
     contacto_nombre = c6.text_input("Contacto (Nombre Completo)", placeholder="Nombre del contacto", key="a_cont_nombre")
     contacto_numero = c6.text_input("Contacto (Número)", placeholder="Ej: 56912345678", key="a_cont_num")
     contacto_email  = c6.text_input("Contacto (Email)", placeholder="correo@empresa.cl", key="a_cont_email")
 
     st.divider()
     st.subheader("Plan de Implementación")
-    plan_a = st.text_input("Plan Asistencia",
-                           placeholder="Ej: PLAN ASISTENCIA CON MARCAJE Reloj, APP Y/O WEB", key="a_plan")
-    c7, c8 = st.columns(2)
+    plan_a             = st.text_input("Plan Asistencia",
+                                       placeholder="Ej: PLAN ASISTENCIA CON MARCAJE Reloj, APP Y/O WEB", key="a_plan")
+    c7, c8             = st.columns(2)
     casino_a           = c7.text_input("Plan Casino", value="NO APLICA", key="a_casino")
     adicionales_plan_a = c8.text_input("Adicionales", value="NO APLICA", key="a_adicionales_plan")
 
     st.divider()
     st.subheader("Consultas Técnicas")
-    c9, c10 = st.columns(2)
+    c9, c10       = st.columns(2)
     sistema_a     = c9.text_input("Sistema de Asistencia Actual", placeholder="Ej: Cass, Manual", key="a_sistema")
     dispositivo_a = c9.text_input("Dispositivo de Marcaje", placeholder="Ej: APP y Reloj control", key="a_dispositivo")
     tiene_rex_a   = c9.selectbox("¿Tiene Rex+?", ["No", "Si"], key="a_tiene_rex")
@@ -624,7 +514,7 @@ with tab_asi:
 
     st.divider()
     st.subheader("Configuración Adicional")
-    c11, c12 = st.columns(2)
+    c11, c12        = st.columns(2)
     concepto_a      = c11.text_input("Concepto de Asistencia (Remuneración)",
                                      placeholder="Ej: Horas atraso y extra", key="a_concepto")
     cortes_a        = c11.text_input("Cortes Mensuales", placeholder="Ej: 24c/m", key="a_cortes")
