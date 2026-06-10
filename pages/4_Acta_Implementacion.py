@@ -240,7 +240,7 @@ with col_form:
 
     # Ayuda memoria
     if ZOHO_OK:
-        with st.expander("📋 Ver OTs en curso", expanded=False):
+        with st.expander("📋 Ver OTs en curso — haz clic en una fila para autocompletar", expanded=False):
             with st.spinner("Cargando OTs..."):
                 ots = _listar_ots(_token, _PORTAL_ID)
             if ots:
@@ -248,11 +248,26 @@ with col_form:
                 df_ots = pd.DataFrame(ots)
                 if busq:
                     mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
-                    df_ots = df_ots[mask]
-                st.dataframe(df_ots, use_container_width=True, hide_index=True,
-                             column_config={"OT": st.column_config.TextColumn(width="small"),
-                                            "Proyecto": st.column_config.TextColumn(width="large")})
-                st.caption(f"{len(df_ots)} proyectos en curso")
+                    df_ots = df_ots[mask].reset_index(drop=True)
+                seleccion = st.dataframe(
+                    df_ots,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    column_config={
+                        "OT":      st.column_config.TextColumn(width="small"),
+                        "Proyecto": st.column_config.TextColumn(width="large"),
+                    },
+                    key="acta_tabla_ots"
+                )
+                filas = seleccion.selection.get("rows", [])
+                if filas:
+                    ot_sel = df_ots.iloc[filas[0]]["OT"]
+                    st.session_state["acta_ot"]      = ot_sel
+                    st.session_state["last_ot_acta"] = ""
+                    st.rerun()
+                st.caption(f"{len(df_ots)} proyectos en curso · haz clic en una fila para seleccionar")
             else:
                 st.info("No hay proyectos en curso.")
 
