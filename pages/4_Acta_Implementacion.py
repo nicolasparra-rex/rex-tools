@@ -142,6 +142,7 @@ def _get_token(refresh_token, client_id, client_secret):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _listar_ots(access_token, portal_id):
+    ESTADOS = ["inicio sin agenda", "reunion ko", "reunión ko", "agenda por confirmar"]
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     rows = []
@@ -153,7 +154,7 @@ def _listar_ots(access_token, portal_id):
             break
         for p in batch:
             status = p.get("custom_status_name", "")
-            if "en curso" in status.lower():
+            if status.lower() in ESTADOS:
                 cfields = _parse_cf(p.get("custom_fields", []))
                 rows.append({
                     "OT":        p.get("key", ""),
@@ -165,6 +166,9 @@ def _listar_ots(access_token, portal_id):
             break
         index += 100
     return rows
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _buscar_ot(access_token, portal_id, ot):
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     index = 1
@@ -238,9 +242,8 @@ with col_form:
     # ── BÚSQUEDA POR OT ───────────────────────────────────────────────────────
     st.markdown("### 🔍 Buscar proyecto por OT")
 
-    # Ayuda memoria
     if ZOHO_OK:
-        with st.expander("📋 Ver OTs en curso — haz clic en una fila para autocompletar", expanded=False):
+        with st.expander("📋 Ver OTs activas (Inicio sin agenda / Reunión KO / Agenda por confirmar)", expanded=False):
             with st.spinner("Cargando OTs..."):
                 ots = _listar_ots(_token, _PORTAL_ID)
             if ots:
@@ -249,30 +252,13 @@ with col_form:
                 if busq:
                     mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
                     df_ots = df_ots[mask].reset_index(drop=True)
-                seleccion = st.dataframe(
-                    df_ots,
-                    use_container_width=True,
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    column_config={
-                        "OT":      st.column_config.TextColumn(width="small"),
-                        "Proyecto": st.column_config.TextColumn(width="large"),
-                    },
-                    key="acta_tabla_ots"
-                )
-                filas = seleccion.selection.get("rows", [])
-                if filas:
-                    ot_sel = df_ots.iloc[filas[0]]["OT"]
-                    st.session_state["ot_seleccionada_acta"] = ot_sel
-                    st.session_state["last_ot_acta"] = ""
-                st.caption(f"{len(df_ots)} proyectos · haz clic en una fila para seleccionar")
+                st.dataframe(df_ots, use_container_width=True, hide_index=True,
+                             column_config={"OT": st.column_config.TextColumn(width="small"),
+                                            "Proyecto": st.column_config.TextColumn(width="large")},
+                             key="acta_tabla_ots")
+                st.caption(f"{len(df_ots)} proyectos · copia la OT y pégala en el campo de abajo")
             else:
-                st.info("No hay proyectos en este estado.")
-
-    # Inyectar OT seleccionada antes de renderizar el campo
-    if st.session_state.get("ot_seleccionada_acta"):
-        st.session_state["acta_ot"] = st.session_state.pop("ot_seleccionada_acta")
+                st.info("No hay proyectos en estos estados.")
 
     ot_input = st.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910 o 2910", key="acta_ot")
 
