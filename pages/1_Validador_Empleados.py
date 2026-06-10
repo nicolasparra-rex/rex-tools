@@ -292,6 +292,24 @@ def limpiar_direccion(valor):
     return re.sub(r"[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9 ]", "", str(valor).strip())
 
 
+def limpiar_nombre_calle(valor):
+    """Limpia el Nombre Calle: elimina caracteres especiales, números
+    y palabras como depto/departamento/bloque/block y todo lo que las sigue."""
+    if _vacio(valor):
+        return valor
+    texto = str(valor).strip()
+    # 1. Quitar caracteres especiales (mantener letras, números y espacios por ahora)
+    texto = re.sub(r"[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9 ]", " ", texto)
+    # 2. Cortar desde palabras tipo depto/bloque en adelante
+    texto = re.split(r"\b(?:depto|dpto|depto\.?|departamento|bloque|block|blok)\b",
+                     texto, flags=re.IGNORECASE)[0]
+    # 3. Eliminar todos los números
+    texto = re.sub(r"\d+", "", texto)
+    # 4. Normalizar espacios múltiples
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
 def convertir_email_minuscula(valor):
     if _vacio(valor):
         return valor
@@ -639,7 +657,14 @@ def procesar_archivo(uploaded_file):
             correcciones["fechas_normalizadas"] += int((antes.fillna("") != df[campo].fillna("")).sum())
 
     # ───── Dirección ─────
-    campos_direccion = ["Nombre Calle", "Numero Calle", "Departamento"]
+    # Nombre Calle: limpieza especial (sin números, sin depto/bloque)
+    if "Nombre Calle" in df.columns:
+        antes = df["Nombre Calle"].copy()
+        df["Nombre Calle"] = df["Nombre Calle"].apply(limpiar_nombre_calle)
+        correcciones["direcciones_limpiadas"] += int((antes.fillna("") != df["Nombre Calle"].fillna("")).sum())
+
+    # Numero Calle y Departamento: limpieza estándar
+    campos_direccion = ["Numero Calle", "Departamento"]
     for campo in campos_direccion:
         if campo in df.columns:
             antes = df[campo].copy()
