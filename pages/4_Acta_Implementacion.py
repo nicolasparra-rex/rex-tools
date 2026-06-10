@@ -206,11 +206,12 @@ def _extraer_zoho(proyecto):
         return {}
     cfields = _parse_cf(proyecto.get("custom_fields", []))
     return {
-        "empresa":    _cf(cfields, "Razón social"),
-        "jefe":       _cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
-        "correo":     _cf(cfields, "Correo del contacto"),
-        "telefono":   _cf(cfields, "Telefono de contacto"),
-        "nombre_proyecto": proyecto.get("name", ""),
+        "empresa":          _cf(cfields, "Razón social"),
+        "jefe":             _cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
+        "correo":           _cf(cfields, "Correo del contacto"),
+        "telefono":         _cf(cfields, "Telefono de contacto"),
+        "consultor":        _cf(cfields, "Consultor 1"),
+        "nombre_proyecto":  proyecto.get("name", ""),
     }
 
 try:
@@ -409,7 +410,14 @@ with col_form:
 
     with col2:
         cons_opts    = ["— Nuevo —"] + consultores_nombres
-        cons_default = client["consultor"] if client else (consultores_nombres[0] if consultores_nombres else "— Nuevo —")
+        # Preseleccionar desde Zoho si hay coincidencia
+        consultor_zoho = st.session_state.zoho_acta.get("consultor", "")
+        if client:
+            cons_default = client["consultor"]
+        elif consultor_zoho and consultor_zoho in consultores_nombres:
+            cons_default = consultor_zoho
+        else:
+            cons_default = consultores_nombres[0] if consultores_nombres else "— Nuevo —"
         cons_idx     = cons_opts.index(cons_default) if cons_default in cons_opts else 0
         cons_sel     = st.selectbox("Consultor REX", cons_opts, index=cons_idx)
 
