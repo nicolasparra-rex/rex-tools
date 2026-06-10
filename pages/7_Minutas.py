@@ -41,7 +41,8 @@ def get_access_token(refresh_token, client_id, client_secret):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def listar_ots_en_curso(access_token, portal_id):
-    """Retorna lista de proyectos en curso con OT, nombre, consultor y estado."""
+    """Retorna proyectos en estados relevantes para Minutas."""
+    ESTADOS = ["inicio sin agenda", "reunion ko", "reunión ko", "agenda por confirmar"]
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     rows = []
@@ -53,7 +54,7 @@ def listar_ots_en_curso(access_token, portal_id):
             break
         for p in batch:
             status = p.get("custom_status_name", "")
-            if "en curso" in status.lower():
+            if status.lower() in ESTADOS:
                 cfields = parse_custom_fields(p.get("custom_fields", []))
                 rows.append({
                     "OT":        p.get("key", ""),
@@ -352,7 +353,7 @@ with tab_rem:
 
     # ── Ayuda memoria OTs ─────────────────────────────────────────────────────
     if ZOHO_OK:
-        with st.expander("📋 Ver OTs en curso", expanded=False):
+        with st.expander("📋 Ver OTs en curso — haz clic en una fila para autocompletar", expanded=False):
             with st.spinner("Cargando OTs..."):
                 ots = listar_ots_en_curso(token, portal_id)
             if ots:
@@ -360,11 +361,26 @@ with tab_rem:
                 df_ots = pd.DataFrame(ots)
                 if busq:
                     mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
-                    df_ots = df_ots[mask]
-                st.dataframe(df_ots, use_container_width=True, hide_index=True,
-                             column_config={"OT": st.column_config.TextColumn(width="small"),
-                                            "Proyecto": st.column_config.TextColumn(width="large")})
-                st.caption(f"{len(df_ots)} proyectos en curso")
+                    df_ots = df_ots[mask].reset_index(drop=True)
+                seleccion = st.dataframe(
+                    df_ots,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    column_config={
+                        "OT":      st.column_config.TextColumn(width="small"),
+                        "Proyecto": st.column_config.TextColumn(width="large"),
+                    },
+                    key="rem_tabla_ots"
+                )
+                filas = seleccion.selection.get("rows", [])
+                if filas:
+                    ot_sel = df_ots.iloc[filas[0]]["OT"]
+                    st.session_state["r_ot"]      = ot_sel
+                    st.session_state["last_ot"]   = ""  # forzar nueva búsqueda
+                    st.rerun()
+                st.caption(f"{len(df_ots)} proyectos en curso · haz clic en una fila para seleccionar")
             else:
                 st.info("No hay proyectos en curso.")
 
@@ -486,11 +502,26 @@ with tab_asi:
                 df_ots_a = pd.DataFrame(ots_a)
                 if busq_a:
                     mask_a = df_ots_a.apply(lambda row: row.astype(str).str.contains(busq_a, case=False).any(), axis=1)
-                    df_ots_a = df_ots_a[mask_a]
-                st.dataframe(df_ots_a, use_container_width=True, hide_index=True,
-                             column_config={"OT": st.column_config.TextColumn(width="small"),
-                                            "Proyecto": st.column_config.TextColumn(width="large")})
-                st.caption(f"{len(df_ots_a)} proyectos en curso")
+                    df_ots_a = df_ots_a[mask_a].reset_index(drop=True)
+                seleccion_a = st.dataframe(
+                    df_ots_a,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    column_config={
+                        "OT":      st.column_config.TextColumn(width="small"),
+                        "Proyecto": st.column_config.TextColumn(width="large"),
+                    },
+                    key="asi_tabla_ots"
+                )
+                filas_a = seleccion_a.selection.get("rows", [])
+                if filas_a:
+                    ot_sel_a = df_ots_a.iloc[filas_a[0]]["OT"]
+                    st.session_state["r_ot"]    = ot_sel_a
+                    st.session_state["last_ot"] = ""
+                    st.rerun()
+                st.caption(f"{len(df_ots_a)} proyectos en curso · haz clic en una fila para seleccionar")
             else:
                 st.info("No hay proyectos en curso.")
 
