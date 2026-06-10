@@ -142,7 +142,7 @@ def _get_token(refresh_token, client_id, client_secret):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _listar_ots(access_token, portal_id):
-    ESTADOS = ["inicio sin agenda", "reunion ko", "reunión ko", "agenda por confirmar"]
+    ESTADOS = ["en curso"]
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     rows = []
@@ -243,7 +243,7 @@ with col_form:
     st.markdown("### 🔍 Buscar proyecto por OT")
 
     if ZOHO_OK:
-        with st.expander("📋 Ver OTs activas (Inicio sin agenda / Reunión KO / Agenda por confirmar)", expanded=False):
+        with st.expander("📋 Ver OTs en curso", expanded=False):
             with st.spinner("Cargando OTs..."):
                 ots = _listar_ots(_token, _PORTAL_ID)
             if ots:
