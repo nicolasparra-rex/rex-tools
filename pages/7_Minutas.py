@@ -1,9 +1,12 @@
 """
 Rex+ Tools — Minutas de Implementación
 Formulario para generar minutas de Remuneración y Asistencia en Excel.
+Autocompletado desde Zoho Projects al ingresar la OT.
 """
 
 import io
+import json
+import requests
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -22,6 +25,85 @@ if BRANDING:
 else:
     st.title("📋 Minutas de Implementación")
     st.caption("Completa los datos y descarga la minuta en Excel lista para entregar.")
+
+# ── ZOHO HELPERS ──────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=3000, show_spinner=False)
+def get_access_token(refresh_token, client_id, client_secret):
+    r = requests.post("https://accounts.zoho.com/oauth/v2/token", params={
+        "refresh_token": refresh_token,
+        "client_id":     client_id,
+        "client_secret": client_secret,
+        "grant_type":    "refresh_token",
+    })
+    return r.json().get("access_token")
+
+@st.cache_data(ttl=600, show_spinner=False)
+def buscar_proyecto_por_ot(access_token, portal_id, ot):
+    """Busca un proyecto cuyo key o nombre contenga la OT."""
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
+        batch = r.json().get("projects", [])
+        if not batch:
+            break
+        for p in batch:
+            key  = p.get("key", "").upper()
+            name = p.get("name", "").upper()
+            ot_upper = ot.strip().upper()
+            if ot_upper == key or ot_upper in name:
+                return p
+        if len(batch) < 100:
+            break
+        index += 100
+    return None
+
+def parse_custom_fields(custom_fields):
+    result = {}
+    if not isinstance(custom_fields, list):
+        return result
+    for item in custom_fields:
+        if isinstance(item, dict):
+            for k, v in item.items():
+                result[k] = v
+    return result
+
+def cf(fields, *keys):
+    for k in keys:
+        if k in fields and fields[k] not in (None, "", "false", False):
+            val = fields[k]
+            if isinstance(val, str) and val.startswith("["):
+                try:
+                    parsed = json.loads(val)
+                    return ", ".join(parsed) if isinstance(parsed, list) else val
+                except Exception:
+                    pass
+            return str(val)
+    return ""
+
+def extraer_datos_zoho(proyecto):
+    """Extrae campos del proyecto Zoho y los mapea al formulario."""
+    if not proyecto:
+        return {}
+    cfields = parse_custom_fields(proyecto.get("custom_fields", []))
+    return {
+        "empresa":        cf(cfields, "Razón social"),
+        "rut":            cf(cfields, "RUT Empresa"),
+        "vendedor":       cf(cfields, "Vendedor"),
+        "jefe_proyecto":  proyecto.get("owner_name", ""),
+        "direccion":      cf(cfields, "Dirección"),
+        "correo":         cf(cfields, "Correo del contacto"),
+        "telefono":       cf(cfields, "Telefono de contacto"),
+        "plan":           cf(cfields, "Plan Contratado"),
+        "colaboradores":  cf(cfields, "Cantidad de empleados"),
+        "razones":        cf(cfields, "Cantidad de empresas"),
+        "empresa_venta":  cf(cfields, "Empresa Venta"),
+        "contacto":       cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
+    }
+
+# ── EXCEL HELPERS ─────────────────────────────────────────────────────────────
 
 COLOR_TITLE    = "1B3A6B"
 COLOR_SECTION  = "2E6DB4"
@@ -205,30 +287,89 @@ def generar_excel(data_rem, data_asi):
     buf.seek(0)
     return buf.read()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# UI
-# ─────────────────────────────────────────────────────────────────────────────
+# ── ZOHO: obtener token y buscar proyecto ─────────────────────────────────────
+
+VENDEDORES = ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo Verdejo',
+              'Francisca Soto', 'Francisco Reig', 'Gislaine Sepulveda', 'Gonzalo Pereira',
+              'Jenny Chavarro', 'Juan Carlos Rabi', 'Marcelo Baeza', 'Matías Ossandon',
+              'Mauricio Bastías', 'Roberto Ramírez', 'Sebastian Ulloa', 'Tamara Castro',
+              'Valentina Berrios', 'Yanin Rebolledo', 'Otro', 'Sin Definir']
+
+portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
+
+try:
+    token = get_access_token(
+        st.secrets["ZOHO_REFRESH_TOKEN"],
+        st.secrets["ZOHO_CLIENT_ID"],
+        st.secrets["ZOHO_CLIENT_SECRET"],
+    )
+    ZOHO_OK = bool(token)
+except Exception:
+    token = None
+    ZOHO_OK = False
+
+# ── SESSION STATE para datos Zoho ─────────────────────────────────────────────
+if "zoho_data" not in st.session_state:
+    st.session_state.zoho_data = {}
+if "last_ot" not in st.session_state:
+    st.session_state.last_ot = ""
+
+def z(key, default=""):
+    """Retorna valor desde Zoho si existe, si no el default."""
+    return st.session_state.zoho_data.get(key, default)
+
+# ── UI ────────────────────────────────────────────────────────────────────────
 
 tab_rem, tab_asi = st.tabs(["📊 Remuneraciones", "🕐 Asistencia"])
 
 with tab_rem:
     st.subheader("Datos Generales del Cliente")
+
     c1, c2 = st.columns(2)
-    ot              = c1.text_input("OT (Orden de Trabajo)", placeholder="Ej: 2757", key="r_ot")
-    empresa_r       = c1.text_input("Empresa / Razón Social", placeholder="Ej: Fundación Ejemplo", key="r_empresa")
-    rut_r           = c1.text_input("RUT Empresa", placeholder="Ej: 65058734-0", key="r_rut")
-    vendedor_r      = c1.selectbox("Vendedor", ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo Verdejo', 'Francisca Soto', 'Francisco Reig', 'Gislaine Sepulveda', 'Gonzalo Pereira', 'Jenny Chavarro', 'Juan Carlos Rabi', 'Marcelo Baeza', 'Matías Ossandon', 'Mauricio Bastías', 'Roberto Ramírez', 'Sebastian Ulloa', 'Tamara Castro', 'Valentina Berrios', 'Yanin Rebolledo', 'Otro', 'Sin Definir'], key="r_vendedor")
-    jefe_proyecto_r = c2.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="r_jefe_proyecto")
-    direccion_r     = c2.text_input("Dirección", placeholder="Ej: Av. Principal 123", key="r_direccion")
-    correo_r        = c2.text_input("Correo de Contacto", placeholder="correo@empresa.cl", key="r_correo")
-    telefono_r      = c2.text_input("Número de Contacto", placeholder="Ej: 56912345678", key="r_telefono")
-    plan_r          = c2.selectbox("Plan Contratado",
-                                   ["Express (0-100 colab)", "Base (101-200 colab)",
-                                    "Estandar (201-800 colab)", "Full (801-3000 colab)",
-                                    "Mega Full (3001+)"], key="r_plan")
-    col_r, col_rs   = st.columns(2)
-    colaboradores_r = col_r.number_input("Cantidad de Colaboradores", min_value=1, value=1, step=1, key="r_colab")
-    razones_r       = col_rs.number_input("Cantidad de Razones Sociales", min_value=1, value=1, step=1, key="r_razones")
+
+    # OT — al escribir dispara búsqueda en Zoho
+    ot = c1.text_input("OT (Orden de Trabajo)", placeholder="Ej: 2757", key="r_ot")
+
+    if ot and ot != st.session_state.last_ot and ZOHO_OK:
+        with st.spinner(f"🔍 Buscando OT {ot} en Zoho..."):
+            proyecto = buscar_proyecto_por_ot(token, portal_id, ot)
+        if proyecto:
+            st.session_state.zoho_data = extraer_datos_zoho(proyecto)
+            st.session_state.last_ot = ot
+            st.success(f"✅ Proyecto encontrado: **{proyecto.get('name', '')}**")
+        else:
+            st.session_state.zoho_data = {}
+            st.session_state.last_ot = ot
+            st.warning(f"⚠️ No se encontró proyecto con OT **{ot}** en Zoho.")
+
+    empresa_r       = c1.text_input("Empresa / Razón Social", value=z("empresa"), placeholder="Ej: Fundación Ejemplo", key="r_empresa")
+    rut_r           = c1.text_input("RUT Empresa", value=z("rut"), placeholder="Ej: 65058734-0", key="r_rut")
+
+    # Vendedor: intentar preseleccionar desde Zoho
+    vendedor_z = z("vendedor")
+    v_idx = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
+    vendedor_r = c1.selectbox("Vendedor", VENDEDORES, index=v_idx, key="r_vendedor")
+
+    jefe_proyecto_r = c2.text_input("Jefe de Proyecto", value=z("jefe_proyecto"), placeholder="Ej: Nicolás Parra", key="r_jefe_proyecto")
+    direccion_r     = c2.text_input("Dirección", value=z("direccion"), placeholder="Ej: Av. Principal 123", key="r_direccion")
+    correo_r        = c2.text_input("Correo de Contacto", value=z("correo"), placeholder="correo@empresa.cl", key="r_correo")
+    telefono_r      = c2.text_input("Número de Contacto", value=z("telefono"), placeholder="Ej: 56912345678", key="r_telefono")
+
+    PLANES_R = ["Express (0-100 colab)", "Base (101-200 colab)",
+                "Estandar (201-800 colab)", "Full (801-3000 colab)", "Mega Full (3001+)"]
+    plan_z = z("plan")
+    plan_idx = next((i for i, p in enumerate(PLANES_R) if plan_z.lower() in p.lower()), 0)
+    plan_r = c2.selectbox("Plan Contratado", PLANES_R, index=plan_idx, key="r_plan")
+
+    col_r, col_rs = st.columns(2)
+    colab_z = z("colaboradores")
+    colaboradores_r = col_r.number_input("Cantidad de Colaboradores", min_value=1,
+                                          value=max(1, int(colab_z) if str(colab_z).isdigit() else 1),
+                                          step=1, key="r_colab")
+    razones_z = z("razones")
+    razones_r = col_rs.number_input("Cantidad de Razones Sociales", min_value=1,
+                                     value=max(1, int(razones_z) if str(razones_z).isdigit() else 1),
+                                     step=1, key="r_razones")
 
     st.divider()
     st.subheader("Configuración de Remuneraciones")
@@ -267,15 +408,22 @@ with tab_rem:
 with tab_asi:
     st.subheader("Datos de la Empresa")
     c5, c6 = st.columns(2)
-    empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
-    rut_a           = c5.text_input("RUT", placeholder="Ej: 69091300-3", key="a_rut")
-    jefe_proyecto_a = c5.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="a_jefe_proyecto")
-    direccion_a     = c5.text_input("Dirección", placeholder="Ej: Maria Errazuriz 1507", key="a_direccion")
-    vendedor_a      = c5.selectbox("Vendedor", ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo Verdejo', 'Francisca Soto', 'Francisco Reig', 'Gislaine Sepulveda', 'Gonzalo Pereira', 'Jenny Chavarro', 'Juan Carlos Rabi', 'Marcelo Baeza', 'Matías Ossandon', 'Mauricio Bastías', 'Roberto Ramírez', 'Sebastian Ulloa', 'Tamara Castro', 'Valentina Berrios', 'Yanin Rebolledo', 'Otro', 'Sin Definir'], key="a_vendedor")
-    empresa_venta_a = c6.selectbox("Empresa Venta", ["REX", "Visma", "Manager", "Otro"], key="a_emp_venta")
-    contacto_nombre = c6.text_input("Contacto (Nombre Completo)", placeholder="Nombre del contacto", key="a_cont_nombre")
-    contacto_numero = c6.text_input("Contacto (Número)", placeholder="Ej: 56912345678", key="a_cont_num")
-    contacto_email  = c6.text_input("Contacto (Email)", placeholder="correo@empresa.cl", key="a_cont_email")
+    empresa_a       = c5.text_input("Empresa", value=z("empresa"), placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
+    rut_a           = c5.text_input("RUT", value=z("rut"), placeholder="Ej: 69091300-3", key="a_rut")
+    jefe_proyecto_a = c5.text_input("Jefe de Proyecto", value=z("jefe_proyecto"), placeholder="Ej: Nicolás Parra", key="a_jefe_proyecto")
+    direccion_a     = c5.text_input("Dirección", value=z("direccion"), placeholder="Ej: Maria Errazuriz 1507", key="a_direccion")
+
+    v_idx_a = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
+    vendedor_a = c5.selectbox("Vendedor", VENDEDORES, index=v_idx_a, key="a_vendedor")
+
+    EMP_VENTA = ["REX", "Visma", "Manager", "Otro"]
+    emp_venta_z = z("empresa_venta")
+    ev_idx = EMP_VENTA.index(emp_venta_z) if emp_venta_z in EMP_VENTA else 0
+    empresa_venta_a = c6.selectbox("Empresa Venta", EMP_VENTA, index=ev_idx, key="a_emp_venta")
+
+    contacto_nombre = c6.text_input("Contacto (Nombre Completo)", value=z("contacto"), placeholder="Nombre del contacto", key="a_cont_nombre")
+    contacto_numero = c6.text_input("Contacto (Número)", value=z("telefono"), placeholder="Ej: 56912345678", key="a_cont_num")
+    contacto_email  = c6.text_input("Contacto (Email)", value=z("correo"), placeholder="correo@empresa.cl", key="a_cont_email")
 
     st.divider()
     st.subheader("Plan de Implementación")
@@ -292,7 +440,10 @@ with tab_asi:
     dispositivo_a = c9.text_input("Dispositivo de Marcaje", placeholder="Ej: APP y Reloj control", key="a_dispositivo")
     tiene_rex_a   = c9.selectbox("¿Tiene Rex+?", ["No", "Si"], key="a_tiene_rex")
     cant_rut_a    = c9.number_input("Cantidad de RUT", min_value=1, value=1, step=1, key="a_cant_rut")
-    cant_emp_a    = c10.number_input("Cantidad de Empleados", min_value=1, value=1, step=1, key="a_cant_emp")
+    cant_emp_z    = z("colaboradores")
+    cant_emp_a    = c10.number_input("Cantidad de Empleados", min_value=1,
+                                      value=max(1, int(cant_emp_z) if str(cant_emp_z).isdigit() else 1),
+                                      step=1, key="a_cant_emp")
     art22_a       = c10.selectbox("Empleados Art. 22", ["No", "Si", "Parcial"], key="a_art22")
     horario_a     = c10.text_input("Tipos de Horario", placeholder="Ej: Varios, Turno fijo", key="a_horario")
     ubicaciones_a = c10.text_input("Cantidad de Ubicaciones", placeholder="Ej: 1, Varias", key="a_ubicaciones")
@@ -306,7 +457,7 @@ with tab_asi:
     observaciones_a = c12.text_area("Adicionales / Observaciones", height=80,
                                     placeholder="Observaciones adicionales...", key="a_obs")
 
-# ── Descarga ─────────────────────────────────────────────────────────────────
+# ── Descarga ──────────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("Descargar Minutas")
 
