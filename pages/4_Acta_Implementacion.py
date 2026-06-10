@@ -207,9 +207,11 @@ for k, v in {"zoho_acta": {}, "last_ot_acta": "", "zoho_acta_msg": ()}.items():
 # ── Layout ────────────────────────────────────────────────────────────────────
 col_form, col_right = st.columns([3, 2], gap="large")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# COLUMNA IZQUIERDA
+# ═══════════════════════════════════════════════════════════════════════════════
 with col_form:
 
-<<<<<<< HEAD
     # ── BÚSQUEDA POR OT ───────────────────────────────────────────────────────
     st.markdown("### 🔍 Buscar proyecto por OT")
     ot_input = st.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910 o 2910", key="acta_ot")
@@ -238,9 +240,6 @@ with col_form:
     st.divider()
 
     # ── PASO 1: Cliente ───────────────────────────────────────────────────────
-=======
-    # ── PASO 1 ────────────────────────────────────────────────────────────────
->>>>>>> 32abdb160c9eefc482c09f9eee71bfb62534563c
     step_pill(1, "Selecciona o ingresa el cliente",
               done=st.session_state.edit_mode is False and st.session_state.last_selected != "")
 
@@ -277,7 +276,7 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 2 ────────────────────────────────────────────────────────────────
+    # ── PASO 2: Datos del cliente ─────────────────────────────────────────────
     step_pill(2, "Datos del cliente")
     st.markdown("### Datos del cliente")
 
@@ -325,7 +324,7 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 3 ────────────────────────────────────────────────────────────────
+    # ── PASO 3: Equipo REX+ ───────────────────────────────────────────────────
     step_pill(3, "Equipo REX+")
     st.markdown("### Equipo REX+")
 
@@ -354,10 +353,12 @@ with col_form:
                                            value=jefe_data.get("telefono", ""),
                                            placeholder="+56 9 XXXX XXXX",
                                            key="tel_jefe_exist")
-            if tel_jefe_rex and tel_jefe_rex != jefe_data.get("telefono", ""):
+            # Guardar teléfono si se ingresó
+            tel_guardado_j = jefe_data.get("telefono", "")
+            if tel_jefe_rex and tel_jefe_rex != tel_guardado_j:
                 if st.button("💾 Guardar teléfono jefe", key="save_tel_jefe", use_container_width=True):
                     update_equipo_telefono("jefes", jefe_sel, tel_jefe_rex)
-                    st.toast("✓ Teléfono guardado.", icon="✅")
+                    st.success("✓ Teléfono guardado.")
                     st.rerun()
 
     with col2:
@@ -378,10 +379,12 @@ with col_form:
                                             value=cons_data.get("telefono", ""),
                                             placeholder="+56 9 XXXX XXXX",
                                             key="tel_cons_exist")
-            if tel_consultor and tel_consultor != cons_data.get("telefono", ""):
+            # Guardar teléfono si se ingresó
+            tel_guardado_c = cons_data.get("telefono", "")
+            if tel_consultor and tel_consultor != tel_guardado_c:
                 if st.button("💾 Guardar teléfono consultor", key="save_tel_cons", use_container_width=True):
                     update_equipo_telefono("consultores", cons_sel, tel_consultor)
-                    st.toast("✓ Teléfono guardado.", icon="✅")
+                    st.success("✓ Teléfono guardado.")
                     st.rerun()
 
         horas = st.number_input("Horas de sesión", min_value=1, max_value=8,
@@ -392,13 +395,13 @@ with col_form:
         if jefe_sel == "— Nuevo —" and jefe_rex:
             if st.button("💾 Guardar jefe", use_container_width=True):
                 add_equipo_member("jefes", jefe_rex, email_jefe_rex, tel_jefe_rex)
-                st.toast(f"✓ Jefe '{jefe_rex}' guardado.", icon="✅")
+                st.success(f"✓ Jefe '{jefe_rex}' guardado.")
                 st.rerun()
     with col_gc:
         if cons_sel == "— Nuevo —" and consultor:
             if st.button("💾 Guardar consultor", use_container_width=True):
                 add_equipo_member("consultores", consultor, email_consultor, tel_consultor)
-                st.toast(f"✓ Consultor '{consultor}' guardado.", icon="✅")
+                st.success(f"✓ Consultor '{consultor}' guardado.")
                 st.rerun()
 
     with st.expander("🗑 Gestionar equipo guardado"):
@@ -420,7 +423,7 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 4 ────────────────────────────────────────────────────────────────
+    # ── PASO 4: Sesión ────────────────────────────────────────────────────────
     step_pill(4, "Datos de la sesión")
     st.markdown("### Datos de la sesión")
 
@@ -439,18 +442,19 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 5 ────────────────────────────────────────────────────────────────
+    # ── PASO 5: Asistentes ────────────────────────────────────────────────────
     step_pill(5, "Asistentes a la sesión")
     st.markdown("### Asistentes a la sesión")
 
+    # Construir lista base desde el cliente guardado, o desde los campos actuales
     if client and client.get("asistentes"):
         default_asistentes = client["asistentes"]
     else:
         default_asistentes = [
             {"nombre": client["usuario_impl"] if client else usuario_impl, "cargo": "", "gerencia": ""},
             {"nombre": client["jefe_cliente"] if client else jefe_cliente,  "cargo": "", "gerencia": ""},
-            {"nombre": jefe_rex,  "cargo": "", "gerencia": ""},
-            {"nombre": consultor, "cargo": "", "gerencia": ""},
+            {"nombre": jefe_rex,   "cargo": "", "gerencia": ""},
+            {"nombre": consultor,  "cargo": "", "gerencia": ""},
         ]
 
     edited = st.data_editor(
@@ -503,9 +507,9 @@ with col_form:
                         nombre_display,
                         nombre_display.lower() if nombre_display else "",
                     ))
-                    st.toast(f"✓ Cliente '{nombre_display}' guardado.", icon="✅")
+                    st.success(f"✓ Cliente '{nombre_display}' guardado.")
                     st.session_state.edit_mode = False
-                    reset_notes()
+                    reset_notes()  # ← CAMBIO 1
                     st.rerun()
     elif st.session_state.edit_mode:
         if st.button("💾 Guardar cambios", use_container_width=True, type="primary"):
@@ -516,9 +520,9 @@ with col_form:
                     client["nombre_display"],
                     client.get("keyword_drive", ""),
                 ))
-                st.toast(f"✓ Cambios guardados para {client['nombre_display']}.", icon="✅")
+                st.success(f"✓ Cambios guardados para **{client['nombre_display']}**.")
                 st.session_state.edit_mode = False
-                reset_notes()
+                reset_notes()  # ← CAMBIO 1
                 st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -592,7 +596,7 @@ with col_right:
                         if str(row["nombre"]).strip()
                     ]
 
-                    # Auto-guardar asistentes en el cliente
+                    # Auto-guardar asistentes en el cliente ← CAMBIO 4
                     if client and asistentes_list:
                         updated = dict(client)
                         updated["asistentes"] = asistentes_list
