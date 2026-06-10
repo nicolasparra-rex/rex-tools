@@ -7,6 +7,7 @@ Autocompletado desde Zoho Projects al ingresar la OT.
 import io
 import json
 import requests
+import pandas as pd
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -39,7 +40,31 @@ def get_access_token(refresh_token, client_id, client_secret):
     return r.json().get("access_token")
 
 @st.cache_data(ttl=600, show_spinner=False)
-def buscar_proyecto_por_ot(access_token, portal_id, ot):
+def listar_ots_en_curso(access_token, portal_id):
+    """Retorna lista de proyectos en curso con OT, nombre, consultor y estado."""
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    rows = []
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
+        batch = r.json().get("projects", [])
+        if not batch:
+            break
+        for p in batch:
+            status = p.get("custom_status_name", "")
+            if "en curso" in status.lower():
+                cfields = parse_custom_fields(p.get("custom_fields", []))
+                rows.append({
+                    "OT":        p.get("key", ""),
+                    "Proyecto":  p.get("name", ""),
+                    "Consultor": cf(cfields, "Consultor 1"),
+                    "Estado":    status,
+                })
+        if len(batch) < 100:
+            break
+        index += 100
+    return rows
     """Busca un proyecto cuyo key o nombre contenga la OT."""
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
@@ -325,6 +350,24 @@ tab_rem, tab_asi = st.tabs(["📊 Remuneraciones", "🕐 Asistencia"])
 with tab_rem:
     st.subheader("Datos Generales del Cliente")
 
+    # ── Ayuda memoria OTs ─────────────────────────────────────────────────────
+    if ZOHO_OK:
+        with st.expander("📋 Ver OTs en curso", expanded=False):
+            with st.spinner("Cargando OTs..."):
+                ots = listar_ots_en_curso(token, portal_id)
+            if ots:
+                busq = st.text_input("🔍 Filtrar", placeholder="Buscar por OT, nombre o consultor...", key="rem_busq_ot")
+                df_ots = pd.DataFrame(ots)
+                if busq:
+                    mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
+                    df_ots = df_ots[mask]
+                st.dataframe(df_ots, use_container_width=True, hide_index=True,
+                             column_config={"OT": st.column_config.TextColumn(width="small"),
+                                            "Proyecto": st.column_config.TextColumn(width="large")})
+                st.caption(f"{len(df_ots)} proyectos en curso")
+            else:
+                st.info("No hay proyectos en curso.")
+
     c1, c2 = st.columns(2)
 
     # OT — al escribir dispara búsqueda en Zoho
@@ -432,6 +475,25 @@ with tab_rem:
 
 with tab_asi:
     st.subheader("Datos de la Empresa")
+
+    # ── Ayuda memoria OTs ─────────────────────────────────────────────────────
+    if ZOHO_OK:
+        with st.expander("📋 Ver OTs en curso", expanded=False):
+            with st.spinner("Cargando OTs..."):
+                ots_a = listar_ots_en_curso(token, portal_id)
+            if ots_a:
+                busq_a = st.text_input("🔍 Filtrar", placeholder="Buscar por OT, nombre o consultor...", key="asi_busq_ot")
+                df_ots_a = pd.DataFrame(ots_a)
+                if busq_a:
+                    mask_a = df_ots_a.apply(lambda row: row.astype(str).str.contains(busq_a, case=False).any(), axis=1)
+                    df_ots_a = df_ots_a[mask_a]
+                st.dataframe(df_ots_a, use_container_width=True, hide_index=True,
+                             column_config={"OT": st.column_config.TextColumn(width="small"),
+                                            "Proyecto": st.column_config.TextColumn(width="large")})
+                st.caption(f"{len(df_ots_a)} proyectos en curso")
+            else:
+                st.info("No hay proyectos en curso.")
+
     c5, c6 = st.columns(2)
     empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
     rut_a           = c5.text_input("RUT", placeholder="Ej: 69091300-3", key="a_rut")

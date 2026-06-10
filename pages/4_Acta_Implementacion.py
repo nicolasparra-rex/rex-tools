@@ -141,7 +141,30 @@ def _get_token(refresh_token, client_id, client_secret):
     return r.json().get("access_token")
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _buscar_ot(access_token, portal_id, ot):
+def _listar_ots(access_token, portal_id):
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    rows = []
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
+        batch = r.json().get("projects", [])
+        if not batch:
+            break
+        for p in batch:
+            status = p.get("custom_status_name", "")
+            if "en curso" in status.lower():
+                cfields = _parse_cf(p.get("custom_fields", []))
+                rows.append({
+                    "OT":        p.get("key", ""),
+                    "Proyecto":  p.get("name", ""),
+                    "Consultor": _cf(cfields, "Consultor 1"),
+                    "Estado":    status,
+                })
+        if len(batch) < 100:
+            break
+        index += 100
+    return rows
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     index = 1
@@ -214,6 +237,25 @@ with col_form:
 
     # ── BÚSQUEDA POR OT ───────────────────────────────────────────────────────
     st.markdown("### 🔍 Buscar proyecto por OT")
+
+    # Ayuda memoria
+    if ZOHO_OK:
+        with st.expander("📋 Ver OTs en curso", expanded=False):
+            with st.spinner("Cargando OTs..."):
+                ots = _listar_ots(_token, _PORTAL_ID)
+            if ots:
+                busq = st.text_input("🔍 Filtrar", placeholder="Buscar por OT, nombre o consultor...", key="acta_busq_ot")
+                df_ots = pd.DataFrame(ots)
+                if busq:
+                    mask = df_ots.apply(lambda row: row.astype(str).str.contains(busq, case=False).any(), axis=1)
+                    df_ots = df_ots[mask]
+                st.dataframe(df_ots, use_container_width=True, hide_index=True,
+                             column_config={"OT": st.column_config.TextColumn(width="small"),
+                                            "Proyecto": st.column_config.TextColumn(width="large")})
+                st.caption(f"{len(df_ots)} proyectos en curso")
+            else:
+                st.info("No hay proyectos en curso.")
+
     ot_input = st.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910 o 2910", key="acta_ot")
 
     if ot_input and ot_input != st.session_state.last_ot_acta and ZOHO_OK:
