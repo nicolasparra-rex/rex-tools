@@ -156,10 +156,11 @@ def _listar_ots(access_token, portal_id):
             status = p.get("custom_status_name", "")
             if status.lower() in ESTADOS:
                 cfields = _parse_cf(p.get("custom_fields", []))
+                consultor_raw = _cf(cfields, "Consultor 1")
                 rows.append({
                     "OT":        p.get("key", ""),
                     "Proyecto":  p.get("name", ""),
-                    "Consultor": _cf(cfields, "Consultor 1"),
+                    "Consultor": consultor_raw,
                     "Estado":    status,
                 })
         if len(batch) < 100:
@@ -252,6 +253,11 @@ with col_form:
 
     if ZOHO_OK:
         with st.expander("📋 Ver OTs en curso", expanded=False):
+            col_ref, _ = st.columns([1, 4])
+            with col_ref:
+                if st.button("🔄 Refrescar", key="acta_refresh_ots", use_container_width=True):
+                    st.cache_data.clear()
+                    st.rerun()
             with st.spinner("Cargando OTs..."):
                 ots = _listar_ots(_token, _PORTAL_ID)
             if ots:
