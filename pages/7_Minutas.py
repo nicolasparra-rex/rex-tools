@@ -369,7 +369,7 @@ with tab_rem:
                     on_select="rerun",
                     selection_mode="single-row",
                     column_config={
-                        "OT":      st.column_config.TextColumn(width="small"),
+                        "OT":       st.column_config.TextColumn(width="small"),
                         "Proyecto": st.column_config.TextColumn(width="large"),
                     },
                     key="rem_tabla_ots"
@@ -377,12 +377,16 @@ with tab_rem:
                 filas = seleccion.selection.get("rows", [])
                 if filas:
                     ot_sel = df_ots.iloc[filas[0]]["OT"]
-                    st.session_state["r_ot"]      = ot_sel
-                    st.session_state["last_ot"]   = ""  # forzar nueva búsqueda
-                    st.rerun()
-                st.caption(f"{len(df_ots)} proyectos en curso · haz clic en una fila para seleccionar")
+                    # Guardar en key intermedia y limpiar last_ot para forzar búsqueda
+                    st.session_state["ot_seleccionada"] = ot_sel
+                    st.session_state["last_ot"] = ""
+                st.caption(f"{len(df_ots)} proyectos · haz clic en una fila para seleccionar")
             else:
-                st.info("No hay proyectos en curso.")
+                st.info("No hay proyectos en este estado.")
+
+    # Si viene OT desde selección de tabla, inyectarla antes de renderizar el campo
+    if st.session_state.get("ot_seleccionada"):
+        st.session_state["r_ot"] = st.session_state.pop("ot_seleccionada")
 
     c1, c2 = st.columns(2)
 
@@ -518,12 +522,15 @@ with tab_asi:
                 filas_a = seleccion_a.selection.get("rows", [])
                 if filas_a:
                     ot_sel_a = df_ots_a.iloc[filas_a[0]]["OT"]
-                    st.session_state["r_ot"]    = ot_sel_a
+                    st.session_state["ot_seleccionada"] = ot_sel_a
                     st.session_state["last_ot"] = ""
-                    st.rerun()
-                st.caption(f"{len(df_ots_a)} proyectos en curso · haz clic en una fila para seleccionar")
+                st.caption(f"{len(df_ots_a)} proyectos · haz clic en una fila para seleccionar")
             else:
-                st.info("No hay proyectos en curso.")
+                st.info("No hay proyectos en este estado.")
+
+    # Si viene OT desde selección de tabla, inyectarla antes del campo
+    if st.session_state.get("ot_seleccionada"):
+        st.session_state["r_ot"] = st.session_state.pop("ot_seleccionada")
 
     c5, c6 = st.columns(2)
     empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")

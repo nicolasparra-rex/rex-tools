@@ -264,12 +264,15 @@ with col_form:
                 filas = seleccion.selection.get("rows", [])
                 if filas:
                     ot_sel = df_ots.iloc[filas[0]]["OT"]
-                    st.session_state["acta_ot"]      = ot_sel
+                    st.session_state["ot_seleccionada_acta"] = ot_sel
                     st.session_state["last_ot_acta"] = ""
-                    st.rerun()
-                st.caption(f"{len(df_ots)} proyectos en curso · haz clic en una fila para seleccionar")
+                st.caption(f"{len(df_ots)} proyectos · haz clic en una fila para seleccionar")
             else:
-                st.info("No hay proyectos en curso.")
+                st.info("No hay proyectos en este estado.")
+
+    # Inyectar OT seleccionada antes de renderizar el campo
+    if st.session_state.get("ot_seleccionada_acta"):
+        st.session_state["acta_ot"] = st.session_state.pop("ot_seleccionada_acta")
 
     ot_input = st.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910 o 2910", key="acta_ot")
 
