@@ -334,26 +334,51 @@ with tab_rem:
         with st.spinner(f"🔍 Buscando OT {ot} en Zoho..."):
             proyecto = buscar_proyecto_por_ot(token, portal_id, ot)
         if proyecto:
-            st.session_state.zoho_data = extraer_datos_zoho(proyecto)
-            st.session_state.last_ot = ot
-            st.success(f"✅ Proyecto encontrado: **{proyecto.get('name', '')}**")
+            datos = extraer_datos_zoho(proyecto)
+            st.session_state.zoho_data = datos
+            st.session_state.last_ot   = ot
+            # Escribir directo en los keys de session_state para forzar actualización
+            st.session_state["r_empresa"]       = datos.get("empresa", "")
+            st.session_state["r_rut"]           = datos.get("rut", "")
+            st.session_state["r_jefe_proyecto"] = datos.get("jefe_proyecto", "")
+            st.session_state["r_direccion"]     = datos.get("direccion", "")
+            st.session_state["r_correo"]        = datos.get("correo", "")
+            st.session_state["r_telefono"]      = datos.get("telefono", "")
+            st.session_state["a_empresa"]       = datos.get("empresa", "")
+            st.session_state["a_rut"]           = datos.get("rut", "")
+            st.session_state["a_jefe_proyecto"] = datos.get("jefe_proyecto", "")
+            st.session_state["a_direccion"]     = datos.get("direccion", "")
+            st.session_state["a_cont_email"]    = datos.get("correo", "")
+            st.session_state["a_cont_num"]      = datos.get("telefono", "")
+            st.session_state["a_cont_nombre"]   = datos.get("contacto", "")
+            st.session_state["zoho_msg"]        = ("ok", f"✅ Proyecto encontrado: **{proyecto.get('name', '')}**")
+            st.rerun()
         else:
             st.session_state.zoho_data = {}
-            st.session_state.last_ot = ot
-            st.warning(f"⚠️ No se encontró proyecto con OT **{ot}** en Zoho.")
+            st.session_state.last_ot   = ot
+            st.session_state["zoho_msg"] = ("warn", f"⚠️ No se encontró proyecto con OT **{ot}** en Zoho.")
+            st.rerun()
 
-    empresa_r       = c1.text_input("Empresa / Razón Social", value=z("empresa"), placeholder="Ej: Fundación Ejemplo", key="r_empresa")
-    rut_r           = c1.text_input("RUT Empresa", value=z("rut"), placeholder="Ej: 65058734-0", key="r_rut")
+    # Mostrar mensaje tras rerun
+    if "zoho_msg" in st.session_state:
+        tipo, msg = st.session_state["zoho_msg"]
+        if tipo == "ok":
+            st.success(msg)
+        else:
+            st.warning(msg)
+
+    empresa_r       = c1.text_input("Empresa / Razón Social", placeholder="Ej: Fundación Ejemplo", key="r_empresa")
+    rut_r           = c1.text_input("RUT Empresa", placeholder="Ej: 65058734-0", key="r_rut")
 
     # Vendedor: intentar preseleccionar desde Zoho
     vendedor_z = z("vendedor")
     v_idx = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
     vendedor_r = c1.selectbox("Vendedor", VENDEDORES, index=v_idx, key="r_vendedor")
 
-    jefe_proyecto_r = c2.text_input("Jefe de Proyecto", value=z("jefe_proyecto"), placeholder="Ej: Nicolás Parra", key="r_jefe_proyecto")
-    direccion_r     = c2.text_input("Dirección", value=z("direccion"), placeholder="Ej: Av. Principal 123", key="r_direccion")
-    correo_r        = c2.text_input("Correo de Contacto", value=z("correo"), placeholder="correo@empresa.cl", key="r_correo")
-    telefono_r      = c2.text_input("Número de Contacto", value=z("telefono"), placeholder="Ej: 56912345678", key="r_telefono")
+    jefe_proyecto_r = c2.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="r_jefe_proyecto")
+    direccion_r     = c2.text_input("Dirección", placeholder="Ej: Av. Principal 123", key="r_direccion")
+    correo_r        = c2.text_input("Correo de Contacto", placeholder="correo@empresa.cl", key="r_correo")
+    telefono_r      = c2.text_input("Número de Contacto", placeholder="Ej: 56912345678", key="r_telefono")
 
     PLANES_R = ["Express (0-100 colab)", "Base (101-200 colab)",
                 "Estandar (201-800 colab)", "Full (801-3000 colab)", "Mega Full (3001+)"]
@@ -408,10 +433,10 @@ with tab_rem:
 with tab_asi:
     st.subheader("Datos de la Empresa")
     c5, c6 = st.columns(2)
-    empresa_a       = c5.text_input("Empresa", value=z("empresa"), placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
-    rut_a           = c5.text_input("RUT", value=z("rut"), placeholder="Ej: 69091300-3", key="a_rut")
-    jefe_proyecto_a = c5.text_input("Jefe de Proyecto", value=z("jefe_proyecto"), placeholder="Ej: Nicolás Parra", key="a_jefe_proyecto")
-    direccion_a     = c5.text_input("Dirección", value=z("direccion"), placeholder="Ej: Maria Errazuriz 1507", key="a_direccion")
+    empresa_a       = c5.text_input("Empresa", placeholder="Ej: Municipalidad de Marchigue", key="a_empresa")
+    rut_a           = c5.text_input("RUT", placeholder="Ej: 69091300-3", key="a_rut")
+    jefe_proyecto_a = c5.text_input("Jefe de Proyecto", placeholder="Ej: Nicolás Parra", key="a_jefe_proyecto")
+    direccion_a     = c5.text_input("Dirección", placeholder="Ej: Maria Errazuriz 1507", key="a_direccion")
 
     v_idx_a = VENDEDORES.index(vendedor_z) if vendedor_z in VENDEDORES else 0
     vendedor_a = c5.selectbox("Vendedor", VENDEDORES, index=v_idx_a, key="a_vendedor")
@@ -421,9 +446,9 @@ with tab_asi:
     ev_idx = EMP_VENTA.index(emp_venta_z) if emp_venta_z in EMP_VENTA else 0
     empresa_venta_a = c6.selectbox("Empresa Venta", EMP_VENTA, index=ev_idx, key="a_emp_venta")
 
-    contacto_nombre = c6.text_input("Contacto (Nombre Completo)", value=z("contacto"), placeholder="Nombre del contacto", key="a_cont_nombre")
-    contacto_numero = c6.text_input("Contacto (Número)", value=z("telefono"), placeholder="Ej: 56912345678", key="a_cont_num")
-    contacto_email  = c6.text_input("Contacto (Email)", value=z("correo"), placeholder="correo@empresa.cl", key="a_cont_email")
+    contacto_nombre = c6.text_input("Contacto (Nombre Completo)", placeholder="Nombre del contacto", key="a_cont_nombre")
+    contacto_numero = c6.text_input("Contacto (Número)", placeholder="Ej: 56912345678", key="a_cont_num")
+    contacto_email  = c6.text_input("Contacto (Email)", placeholder="correo@empresa.cl", key="a_cont_email")
 
     st.divider()
     st.subheader("Plan de Implementación")
@@ -440,10 +465,7 @@ with tab_asi:
     dispositivo_a = c9.text_input("Dispositivo de Marcaje", placeholder="Ej: APP y Reloj control", key="a_dispositivo")
     tiene_rex_a   = c9.selectbox("¿Tiene Rex+?", ["No", "Si"], key="a_tiene_rex")
     cant_rut_a    = c9.number_input("Cantidad de RUT", min_value=1, value=1, step=1, key="a_cant_rut")
-    cant_emp_z    = z("colaboradores")
-    cant_emp_a    = c10.number_input("Cantidad de Empleados", min_value=1,
-                                      value=max(1, int(cant_emp_z) if str(cant_emp_z).isdigit() else 1),
-                                      step=1, key="a_cant_emp")
+    cant_emp_a    = c10.number_input("Cantidad de Empleados", min_value=1, value=1, step=1, key="a_cant_emp")
     art22_a       = c10.selectbox("Empleados Art. 22", ["No", "Si", "Parcial"], key="a_art22")
     horario_a     = c10.text_input("Tipos de Horario", placeholder="Ej: Varios, Turno fijo", key="a_horario")
     ubicaciones_a = c10.text_input("Cantidad de Ubicaciones", placeholder="Ej: 1, Varias", key="a_ubicaciones")
