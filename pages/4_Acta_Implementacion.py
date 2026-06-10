@@ -6,6 +6,7 @@ P�gina integrada al hub rex-tools usando el branding compartido.
 import sys
 import json
 import datetime
+import requests
 from pathlib import Path
 
 import streamlit as st
@@ -127,6 +128,82 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
+# ── ZOHO HELPERS ─────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=3000, show_spinner=False)
+def _get_token(refresh_token, client_id, client_secret):
+    r = requests.post("https://accounts.zoho.com/oauth/v2/token", params={
+        "refresh_token": refresh_token,
+        "client_id":     client_id,
+        "client_secret": client_secret,
+        "grant_type":    "refresh_token",
+    })
+    return r.json().get("access_token")
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _buscar_ot(access_token, portal_id, ot):
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
+        batch = r.json().get("projects", [])
+        if not batch:
+            break
+        for p in batch:
+            ot_up = ot.strip().upper()
+            if ot_up == p.get("key", "").upper() or ot_up in p.get("name", "").upper():
+                return p
+        if len(batch) < 100:
+            break
+        index += 100
+    return None
+
+def _parse_cf(custom_fields):
+    result = {}
+    if isinstance(custom_fields, list):
+        for item in custom_fields:
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    result[k] = v
+    return result
+
+def _cf(fields, *keys):
+    for k in keys:
+        if k in fields and fields[k] not in (None, "", "false", False):
+            return str(fields[k])
+    return ""
+
+def _extraer_zoho(proyecto):
+    if not proyecto:
+        return {}
+    cfields = _parse_cf(proyecto.get("custom_fields", []))
+    return {
+        "empresa":    _cf(cfields, "Razón social"),
+        "jefe":       _cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
+        "correo":     _cf(cfields, "Correo del contacto"),
+        "telefono":   _cf(cfields, "Telefono de contacto"),
+        "nombre_proyecto": proyecto.get("name", ""),
+    }
+
+try:
+    _token = _get_token(
+        st.secrets["ZOHO_REFRESH_TOKEN"],
+        st.secrets["ZOHO_CLIENT_ID"],
+        st.secrets["ZOHO_CLIENT_SECRET"],
+    )
+    _PORTAL_ID = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
+    ZOHO_OK = bool(_token)
+except Exception:
+    _token = None
+    _PORTAL_ID = "757079135"
+    ZOHO_OK = False
+
+# Session state para OT
+for k, v in {"zoho_acta": {}, "last_ot_acta": "", "zoho_acta_msg": ()}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 col_form, col_right = st.columns([3, 2], gap="large")
 
@@ -134,6 +211,33 @@ col_form, col_right = st.columns([3, 2], gap="large")
 # COLUMNA IZQUIERDA
 # ═══════════════════════════════════════════════════════════════════════════════
 with col_form:
+
+    # ── BÚSQUEDA POR OT ───────────────────────────────────────────────────────
+    st.markdown("### 🔍 Buscar proyecto por OT")
+    ot_input = st.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910 o 2910", key="acta_ot")
+
+    if ot_input and ot_input != st.session_state.last_ot_acta and ZOHO_OK:
+        with st.spinner(f"Buscando OT {ot_input} en Zoho..."):
+            proyecto = _buscar_ot(_token, _PORTAL_ID, ot_input)
+        if proyecto:
+            datos = _extraer_zoho(proyecto)
+            st.session_state.zoho_acta      = datos
+            st.session_state.last_ot_acta   = ot_input
+            st.session_state.zoho_acta_msg  = ("ok", f"✅ Proyecto encontrado: **{datos['nombre_proyecto']}**")
+        else:
+            st.session_state.zoho_acta      = {}
+            st.session_state.last_ot_acta   = ot_input
+            st.session_state.zoho_acta_msg  = ("warn", f"⚠️ No se encontró proyecto con OT **{ot_input}**.")
+        st.rerun()
+
+    if st.session_state.zoho_acta_msg:
+        tipo, msg = st.session_state.zoho_acta_msg
+        if tipo == "ok":
+            st.success(msg)
+        else:
+            st.warning(msg)
+
+    st.divider()
 
     # ── PASO 1: Cliente ───────────────────────────────────────────────────────
     step_pill(1, "Selecciona o ingresa el cliente",
@@ -176,23 +280,26 @@ with col_form:
     step_pill(2, "Datos del cliente")
     st.markdown("### Datos del cliente")
 
+    # Datos desde Zoho para nuevo cliente
+    _z = st.session_state.zoho_acta
+
     empresa      = st.text_input("Empresa *",
-                                 value=client["empresa"] if client else "",
+                                 value=client["empresa"] if client else _z.get("empresa", ""),
                                  placeholder="RE-XXXX - Nombre empresa (ALIAS)",
                                  disabled=not editable)
     jefe_cliente = st.text_input("Jefe de proyecto cliente *",
-                                 value=client["jefe_cliente"] if client else "",
+                                 value=client["jefe_cliente"] if client else _z.get("jefe", ""),
                                  placeholder="Nombre completo en mayúsculas",
                                  disabled=not editable)
     col1, col2, col3 = st.columns(3)
     with col1:
         email_jefe_cliente = st.text_input("Email jefe cliente",
-                                           value=client.get("email_jefe_cliente", "") if client else "",
+                                           value=client.get("email_jefe_cliente", "") if client else _z.get("correo", ""),
                                            placeholder="nombre@empresa.cl",
                                            disabled=not editable)
     with col2:
         tel_jefe_cliente = st.text_input("Teléfono jefe cliente",
-                                         value=client.get("tel_jefe_cliente", "") if client else "",
+                                         value=client.get("tel_jefe_cliente", "") if client else _z.get("telefono", ""),
                                          placeholder="+56 9 XXXX XXXX",
                                          disabled=not editable)
     with col3:
