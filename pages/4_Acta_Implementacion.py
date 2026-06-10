@@ -198,7 +198,14 @@ def _parse_cf(custom_fields):
 def _cf(fields, *keys):
     for k in keys:
         if k in fields and fields[k] not in (None, "", "false", False):
-            return str(fields[k])
+            val = fields[k]
+            if isinstance(val, str) and val.startswith("["):
+                try:
+                    parsed = json.loads(val)
+                    return parsed[0] if isinstance(parsed, list) and parsed else val
+                except Exception:
+                    pass
+            return str(val)
     return ""
 
 def _extraer_zoho(proyecto):
@@ -414,8 +421,10 @@ with col_form:
         consultor_zoho = st.session_state.zoho_acta.get("consultor", "")
         if client:
             cons_default = client["consultor"]
-        elif consultor_zoho and consultor_zoho in consultores_nombres:
-            cons_default = consultor_zoho
+        elif consultor_zoho:
+            # Buscar coincidencia case-insensitive
+            match = next((n for n in consultores_nombres if n.lower() == consultor_zoho.lower()), None)
+            cons_default = match if match else (consultores_nombres[0] if consultores_nombres else "— Nuevo —")
         else:
             cons_default = consultores_nombres[0] if consultores_nombres else "— Nuevo —"
         cons_idx     = cons_opts.index(cons_default) if cons_default in cons_opts else 0
