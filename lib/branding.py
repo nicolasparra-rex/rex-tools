@@ -33,6 +33,22 @@ CSS_PERSONALIZADO = """
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
+    /* Mantener visible el botón para abrir/cerrar el sidebar (clave en móvil) */
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        z-index: 999999 !important;
+    }
+    [data-testid="collapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        z-index: 999999 !important;
+    }
+    [data-testid="stSidebarCollapseButton"] {
+        visibility: visible !important;
+        display: flex !important;
+    }
+
     .main .block-container {
         padding-top: 2rem !important;
         padding-left: 2rem;
@@ -322,11 +338,31 @@ CSS_PERSONALIZADO = """
        ═══════════════════════════════════════════════ */
     @media (max-width: 768px) {
 
+        /* Botón de menú visible y destacado en móvil */
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"] {
+            visibility: visible !important;
+            display: flex !important;
+            position: fixed !important;
+            top: 0.5rem !important;
+            left: 0.5rem !important;
+            background: #1EBBEF !important;
+            border-radius: 8px !important;
+            padding: 4px !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+            z-index: 999999 !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] svg,
+        [data-testid="collapsedControl"] svg {
+            color: white !important;
+            fill: white !important;
+        }
+
         /* Aprovechar el ancho: menos padding lateral */
         .main .block-container {
             padding-left: 0.75rem !important;
             padding-right: 0.75rem !important;
-            padding-top: 1rem !important;
+            padding-top: 3rem !important;
         }
 
         /* Header compacto */
