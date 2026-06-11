@@ -37,50 +37,6 @@ def get_access_token(refresh_token, client_id, client_secret):
     })
     return r.json().get("access_token")
 
-@st.cache_data(ttl=600, show_spinner=False)
-def get_proyectos_relevantes(access_token, portal_id):
-    """Proyectos En curso + BENEFICIO EMPRESA REXMAS."""
-    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
-    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
-    relevantes = []
-    index = 1
-    while True:
-        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
-        if not batch:
-            break
-        for p in batch:
-            status = p.get("custom_status_name", "").lower()
-            nombre = p.get("name", "").upper()
-            if status == "en curso" or "BENEFICIO EMPRESA REXMAS" in nombre:
-                relevantes.append({"id": p.get("id"), "key": p.get("key", ""), "name": p.get("name", "")})
-        if len(batch) < 100:
-            break
-        index += 100
-    return relevantes
-
-@st.cache_data(ttl=600, show_spinner=False)
-def get_tareas_proyecto(access_token, portal_id, project_id):
-    """Trae TODAS las tareas del proyecto, paginando."""
-    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/{project_id}/tasks/"
-    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
-    todas = []
-    index = 1
-    while True:
-        r = requests.get(url, headers=headers, params={"range": 200, "index": index})
-        if r.status_code != 200:
-            break
-        batch = r.json().get("tasks", [])
-        if not batch:
-            break
-        todas.extend(batch)
-        if len(batch) < 200:
-            break
-        index += 200
-        if index > 2000:
-            break
-    return todas
-
 def parse_fecha(s):
     if not s:
         return None
@@ -92,23 +48,31 @@ def parse_fecha(s):
             pass
     return None
 
-@st.cache_data(ttl=600, show_spinner=True)
+@st.cache_data(ttl=900, show_spinner=True)
 def construir_agenda(_token, portal_id):
-    """Recorre proyectos relevantes y arma DataFrame de agenda.
-    Expande tareas multi-día a cada día del rango start→end."""
-    proyectos = get_proyectos_relevantes(_token, portal_id)
+    """Trae TODAS las tareas del portal vía mytasks?tasktype=all (pocas llamadas)
+    y arma el DataFrame de agenda. Evita el rate limit de recorrer proyecto por proyecto."""
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/mytasks/"
+    headers = {"Authorization": f"Zoho-oauthtoken {_token}"}
     rows = []
-    barra = st.progress(0.0, text="Cargando agendas...")
-    total = len(proyectos)
-    for i, p in enumerate(proyectos):
-        tasks = get_tareas_proyecto(_token, portal_id, p["id"])
-        for t in tasks:
+    index = 1
+    barra = st.progress(0.0, text="Cargando tareas del portal...")
+    paginas = 0
+    while True:
+        r = requests.get(url, headers=headers, params={"tasktype": "all", "range": 200, "index": index})
+        if r.status_code != 200:
+            break
+        batch = r.json().get("tasks", [])
+        if not batch:
+            break
+        for t in batch:
             f_ini = parse_fecha(t.get("start_date_format", "") or t.get("start_date", ""))
             f_fin = parse_fecha(t.get("end_date_format", "") or t.get("end_date", ""))
             if f_ini is None:
                 continue
             if f_fin is None or f_fin < f_ini:
                 f_fin = f_ini
+            proyecto = (t.get("project") or {}).get("name", "")
             owners = (t.get("details") or {}).get("owners", [])
             owners_validos = [
                 (o.get("full_name") or o.get("name", ""))
@@ -116,20 +80,24 @@ def construir_agenda(_token, portal_id):
                 if (o.get("full_name") or o.get("name", "")) and
                    (o.get("full_name") or o.get("name", "")).lower() not in ("sin asignar", "unassigned")
             ]
-            # Expandir a cada día hábil del rango de la tarea
             d = f_ini
             while d <= f_fin:
-                if d.weekday() < 5:  # solo días hábiles
+                if d.weekday() < 5:
                     for nombre in owners_validos:
                         rows.append({
                             "consultor":  nombre,
                             "fecha":      d,
                             "tarea":      t.get("name", ""),
-                            "proyecto":   p["name"],
-                            "completada": t.get("completed", False),
+                            "proyecto":   proyecto,
                         })
                 d += timedelta(days=1)
-        barra.progress((i + 1) / total, text=f"Cargando agendas... {i+1}/{total}")
+        paginas += 1
+        barra.progress(min(paginas / 20, 1.0), text=f"Cargando tareas... página {paginas}")
+        if len(batch) < 200:
+            break
+        index += 200
+        if index > 8000:
+            break
     barra.empty()
     return pd.DataFrame(rows)
 
