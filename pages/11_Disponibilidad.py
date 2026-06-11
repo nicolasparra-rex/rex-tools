@@ -1,11 +1,12 @@
 """
 Rex+ Tools — Disponibilidad por Consultor
-Días ocupados/libres de cada consultor según tareas agendadas en proyectos
-En curso + BENEFICIO EMPRESA REXMAS.
+Selecciona un consultor y muestra sus días ocupados/libres según las tareas
+de sus proyectos En curso (filtrados por el campo 'Consultor 1').
 """
 
 import streamlit as st
 import requests
+import json
 import pandas as pd
 from datetime import datetime, date, timedelta
 from calendar import monthrange
@@ -20,10 +21,9 @@ st.set_page_config(page_title="Disponibilidad | Rex+ Tools", page_icon="📅", l
 
 if BRANDING:
     aplicar_branding(titulo_pagina="Disponibilidad", badge="PRODUCCIÓN")
-    hero("📅 Disponibilidad por Consultor", "Días ocupados y libres según las sesiones agendadas en Zoho Projects.")
+    hero("📅 Disponibilidad por Consultor", "Selecciona un consultor para ver sus días ocupados y libres según su agenda en Zoho.")
 else:
     st.title("📅 Disponibilidad por Consultor")
-    st.caption("Días ocupados y libres según las sesiones agendadas en Zoho Projects.")
 
 # ── ZOHO ──────────────────────────────────────────────────────────────────────
 
@@ -37,6 +37,55 @@ def get_access_token(refresh_token, client_id, client_secret):
     })
     return r.json().get("access_token")
 
+def parse_cf(custom_fields, key):
+    for item in custom_fields:
+        if key in item:
+            v = item[key]
+            if isinstance(v, str) and v.startswith("["):
+                try:
+                    parsed = json.loads(v)
+                    return parsed[0] if parsed else ""
+                except Exception:
+                    return v
+            return v
+    return ""
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_proyectos(access_token, portal_id):
+    """Trae proyectos En curso + BENEFICIO, con su Consultor 1."""
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    proyectos = []
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 100, "index": index})
+        batch = r.json().get("projects", [])
+        if not batch:
+            break
+        for p in batch:
+            status = p.get("custom_status_name", "").lower()
+            nombre = p.get("name", "").upper()
+            if status == "en curso" or "BENEFICIO EMPRESA REXMAS" in nombre:
+                proyectos.append({
+                    "id":        p.get("id"),
+                    "key":       p.get("key", ""),
+                    "name":      p.get("name", ""),
+                    "consultor": parse_cf(p.get("custom_fields", []), "Consultor 1"),
+                })
+        if len(batch) < 100:
+            break
+        index += 100
+    return proyectos
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_tareas_proyecto(access_token, portal_id, project_id):
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/{project_id}/tasks/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    r = requests.get(url, headers=headers, params={"range": 200})
+    if r.status_code != 200:
+        return []
+    return r.json().get("tasks", [])
+
 def parse_fecha(s):
     if not s:
         return None
@@ -48,60 +97,7 @@ def parse_fecha(s):
             pass
     return None
 
-@st.cache_data(ttl=900, show_spinner=True)
-def construir_agenda(_token, portal_id):
-    """Trae TODAS las tareas del portal vía mytasks?tasktype=all (pocas llamadas)
-    y arma el DataFrame de agenda. Evita el rate limit de recorrer proyecto por proyecto."""
-    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/mytasks/"
-    headers = {"Authorization": f"Zoho-oauthtoken {_token}"}
-    rows = []
-    index = 1
-    barra = st.progress(0.0, text="Cargando tareas del portal...")
-    paginas = 0
-    while True:
-        r = requests.get(url, headers=headers, params={"tasktype": "all", "range": 200, "index": index})
-        if r.status_code != 200:
-            break
-        batch = r.json().get("tasks", [])
-        if not batch:
-            break
-        for t in batch:
-            f_ini = parse_fecha(t.get("start_date_format", "") or t.get("start_date", ""))
-            f_fin = parse_fecha(t.get("end_date_format", "") or t.get("end_date", ""))
-            if f_ini is None:
-                continue
-            if f_fin is None or f_fin < f_ini:
-                f_fin = f_ini
-            proyecto = (t.get("project") or {}).get("name", "")
-            owners = (t.get("details") or {}).get("owners", [])
-            owners_validos = [
-                (o.get("full_name") or o.get("name", ""))
-                for o in owners
-                if (o.get("full_name") or o.get("name", "")) and
-                   (o.get("full_name") or o.get("name", "")).lower() not in ("sin asignar", "unassigned")
-            ]
-            d = f_ini
-            while d <= f_fin:
-                if d.weekday() < 5:
-                    for nombre in owners_validos:
-                        rows.append({
-                            "consultor":  nombre,
-                            "fecha":      d,
-                            "tarea":      t.get("name", ""),
-                            "proyecto":   proyecto,
-                        })
-                d += timedelta(days=1)
-        paginas += 1
-        barra.progress(min(paginas / 20, 1.0), text=f"Cargando tareas... página {paginas}")
-        if len(batch) < 200:
-            break
-        index += 200
-        if index > 8000:
-            break
-    barra.empty()
-    return pd.DataFrame(rows)
-
-# ── Cargar datos ──────────────────────────────────────────────────────────────
+# ── Cargar token y proyectos ──────────────────────────────────────────────────
 
 portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
 
@@ -126,37 +122,75 @@ if not ZOHO_OK:
     st.error("❌ No se pudo conectar con Zoho.")
     st.stop()
 
-df = construir_agenda(token, portal_id)
+with st.spinner("Cargando proyectos..."):
+    proyectos = get_proyectos(token, portal_id)
 
-if df.empty:
-    st.warning("No se encontraron tareas con fecha asignadas a consultores.")
+# Lista de consultores disponibles
+consultores = sorted({p["consultor"] for p in proyectos if p["consultor"]})
+
+if not consultores:
+    st.warning("No se encontraron consultores con proyectos En curso.")
     st.stop()
 
-# ── Filtros de rango ──────────────────────────────────────────────────────────
+# ── Selección de consultor ────────────────────────────────────────────────────
 st.divider()
-hoy = date.today()
-fc1, fc2, fc3 = st.columns(3)
-with fc1:
-    rango = st.selectbox("Rango", ["Esta semana", "Próxima semana", "Este mes", "Próximos 30 días", "Personalizado"])
-with fc2:
-    f_desde = st.date_input("Desde", value=hoy, key="f_desde") if rango == "Personalizado" else None
-with fc3:
-    f_hasta = st.date_input("Hasta", value=hoy + timedelta(days=7), key="f_hasta") if rango == "Personalizado" else None
+c1, c2 = st.columns([2, 1])
+with c1:
+    consultor_sel = st.selectbox("👤 Selecciona un consultor", ["— Selecciona —"] + consultores)
+with c2:
+    rango = st.selectbox("📅 Rango", ["Esta semana", "Próxima semana", "Este mes", "Próximos 30 días"])
 
+if consultor_sel == "— Selecciona —":
+    st.info("Selecciona un consultor para ver su disponibilidad.")
+    st.stop()
+
+# Rango de fechas
+hoy = date.today()
 if rango == "Esta semana":
     ini = hoy - timedelta(days=hoy.weekday()); fin = ini + timedelta(days=6)
 elif rango == "Próxima semana":
     ini = hoy - timedelta(days=hoy.weekday()) + timedelta(days=7); fin = ini + timedelta(days=6)
 elif rango == "Este mes":
     ini = date(hoy.year, hoy.month, 1); fin = date(hoy.year, hoy.month, monthrange(hoy.year, hoy.month)[1])
-elif rango == "Próximos 30 días":
-    ini = hoy; fin = hoy + timedelta(days=30)
 else:
-    ini, fin = f_desde, f_hasta
+    ini = hoy; fin = hoy + timedelta(days=30)
 
-st.caption(f"Mostrando del {ini.strftime('%d/%m/%Y')} al {fin.strftime('%d/%m/%Y')}")
+# Proyectos del consultor
+proyectos_consultor = [p for p in proyectos if p["consultor"] == consultor_sel]
+st.caption(f"{len(proyectos_consultor)} proyectos · del {ini.strftime('%d/%m/%Y')} al {fin.strftime('%d/%m/%Y')}")
 
-# Días hábiles (Lun-Vie)
+# Ventana ampliada: desde hoy hasta 30 días adelante (para buscar disponibilidad futura)
+busqueda_ini = min(ini, hoy)
+busqueda_fin = max(fin, hoy + timedelta(days=30))
+
+# Traer tareas de sus proyectos (una sola vez, ventana amplia)
+agenda = []       # dentro del rango visible
+agenda_full = []  # toda la ventana de búsqueda (para próxima disponibilidad)
+barra = st.progress(0.0, text="Cargando agenda...")
+for i, p in enumerate(proyectos_consultor):
+    tasks = get_tareas_proyecto(token, portal_id, p["id"])
+    for t in tasks:
+        f_ini = parse_fecha(t.get("start_date_format", "") or t.get("start_date", ""))
+        f_fin = parse_fecha(t.get("end_date_format", "") or t.get("end_date", ""))
+        if f_ini is None:
+            continue
+        if f_fin is None or f_fin < f_ini:
+            f_fin = f_ini
+        d = f_ini
+        while d <= f_fin:
+            if d.weekday() < 5:
+                if ini <= d <= fin:
+                    agenda.append({"fecha": d, "tarea": t.get("name", ""), "proyecto": p["name"]})
+                if busqueda_ini <= d <= busqueda_fin:
+                    agenda_full.append({"fecha": d})
+            d += timedelta(days=1)
+    barra.progress((i + 1) / max(len(proyectos_consultor), 1), text=f"Cargando agenda... {i+1}/{len(proyectos_consultor)}")
+barra.empty()
+
+df_ag = pd.DataFrame(agenda)
+dias_ocupados_full = set(pd.DataFrame(agenda_full)["fecha"].unique()) if agenda_full else set()
+
+# Días hábiles del rango
 dias_rango = []
 d = ini
 while d <= fin:
@@ -164,54 +198,68 @@ while d <= fin:
         dias_rango.append(d)
     d += timedelta(days=1)
 
-df_rango = df[(df["fecha"] >= ini) & (df["fecha"] <= fin)]
+dias_ocupados = set(df_ag["fecha"].unique()) if not df_ag.empty else set()
+n_ocupados = len([d for d in dias_rango if d in dias_ocupados])
+n_libres   = len(dias_rango) - n_ocupados
+n_sesiones = len(df_ag.drop_duplicates(subset=["tarea", "proyecto", "fecha"])) if not df_ag.empty else 0
 
-# ── TABLA RESUMEN ─────────────────────────────────────────────────────────────
+# ── Resumen ───────────────────────────────────────────────────────────────────
 st.divider()
-st.subheader("📊 Resumen de disponibilidad")
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Sesiones", n_sesiones)
+k2.metric("Días ocupados", n_ocupados)
+k3.metric("Días libres", n_libres)
+k4.metric("% ocupación", f"{round(n_ocupados/len(dias_rango)*100) if dias_rango else 0}%")
 
-consultores = sorted(df["consultor"].unique())
-resumen = []
-for c in consultores:
-    tareas_c = df_rango[df_rango["consultor"] == c]
-    dias_ocupados = set(tareas_c["fecha"].unique())
-    n_ocupados = len([d for d in dias_rango if d in dias_ocupados])
-    n_libres   = len(dias_rango) - n_ocupados
-    n_sesiones = len(tareas_c.drop_duplicates(subset=["tarea", "proyecto"]))
-    resumen.append({
-        "Consultor":     c,
-        "Sesiones":      n_sesiones,
-        "Días ocupados": n_ocupados,
-        "Días libres":   n_libres,
-        "% ocupación":   round(n_ocupados / len(dias_rango) * 100) if dias_rango else 0,
-    })
-
-df_resumen = pd.DataFrame(resumen).sort_values("Días libres", ascending=False)
-st.dataframe(
-    df_resumen,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "% ocupación":   st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
-        "Días libres":   st.column_config.NumberColumn(width="small"),
-        "Días ocupados": st.column_config.NumberColumn(width="small"),
-    }
-)
-
-# ── DETALLE POR CONSULTOR ─────────────────────────────────────────────────────
+# ── Próxima disponibilidad (mirando 30 días adelante) ─────────────────────────
 st.divider()
-st.subheader("🗓️ Detalle de agenda")
+st.subheader("🔎 Próxima disponibilidad")
 
-consultor_sel = st.selectbox("Selecciona un consultor", consultores)
-tareas_sel = df_rango[df_rango["consultor"] == consultor_sel].sort_values("fecha")
-dias_ocupados_sel = set(tareas_sel["fecha"].unique())
+DIAS_COMPLETO = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
-st.markdown(f"**Agenda de {consultor_sel}**")
+# Próximo día hábil libre desde mañana
+proximo_libre = None
+d = hoy + timedelta(days=1)
+limite = hoy + timedelta(days=30)
+while d <= limite:
+    if d.weekday() < 5 and d not in dias_ocupados_full:
+        proximo_libre = d
+        break
+    d += timedelta(days=1)
+
+# Próxima semana (Lun-Vie) completamente despejada
+proxima_semana = None
+# arrancar el próximo lunes
+dlun = hoy + timedelta(days=(7 - hoy.weekday()) % 7 or 7)
+while dlun <= limite:
+    dias_sem = [dlun + timedelta(days=k) for k in range(5)]
+    if all(ds not in dias_ocupados_full for ds in dias_sem):
+        proxima_semana = (dias_sem[0], dias_sem[4])
+        break
+    dlun += timedelta(days=7)
+
+cp1, cp2 = st.columns(2)
+with cp1:
+    if proximo_libre:
+        st.success(f"📆 **Próximo día libre:**\n\n{DIAS_COMPLETO[proximo_libre.weekday()]} {proximo_libre.strftime('%d/%m/%Y')}")
+    else:
+        st.warning("Sin días libres en los próximos 30 días.")
+with cp2:
+    if proxima_semana:
+        a, b = proxima_semana
+        st.success(f"🗓️ **Próxima semana despejada:**\n\n{a.strftime('%d/%m')} al {b.strftime('%d/%m/%Y')}")
+    else:
+        st.info("Ninguna semana completamente libre en los próximos 30 días.")
+
+# ── Detalle día por día ───────────────────────────────────────────────────────
+st.divider()
+st.subheader(f"🗓️ Agenda de {consultor_sel}")
+
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
 for d in dias_rango:
     label = f"{DIAS[d.weekday()]} {d.strftime('%d/%m')}"
-    if d in dias_ocupados_sel:
-        sesiones = tareas_sel[tareas_sel["fecha"] == d].drop_duplicates(subset=["tarea", "proyecto"])
+    if d in dias_ocupados:
+        sesiones = df_ag[df_ag["fecha"] == d].drop_duplicates(subset=["tarea", "proyecto"])
         with st.expander(f"🔴 {label} — {len(sesiones)} sesión(es)", expanded=False):
             for _, s in sesiones.iterrows():
                 st.markdown(f"• **{s['tarea']}** · {s['proyecto']}")
