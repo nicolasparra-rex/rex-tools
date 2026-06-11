@@ -314,6 +314,106 @@ CSS_PERSONALIZADO = """
     .rex-footer strong {
         color: #1EBBEF;
     }
+
+    /* ═══════════════════════════════════════════════
+       RESPONSIVE — Ajustes para celular (≤768px)
+       Solo se activan en pantallas angostas.
+       En desktop todo queda igual.
+       ═══════════════════════════════════════════════ */
+    @media (max-width: 768px) {
+
+        /* Aprovechar el ancho: menos padding lateral */
+        .main .block-container {
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+            padding-top: 1rem !important;
+        }
+
+        /* Header compacto */
+        .rex-header {
+            padding: 0.85rem 1rem;
+            margin-bottom: 1.25rem;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .rex-logo {
+            height: 32px;
+            padding: 4px 10px;
+        }
+        .rex-header-title {
+            font-size: 0.9rem;
+        }
+        .rex-header-badge {
+            font-size: 0.65rem;
+            padding: 3px 9px;
+        }
+
+        /* Hero más chico */
+        .rex-hero h1 {
+            font-size: 1.3rem;
+        }
+        .rex-hero p {
+            font-size: 0.85rem;
+        }
+
+        /* Cards del home: padding reducido */
+        .rex-tool-card {
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .rex-tool-icon {
+            width: 44px;
+            height: 44px;
+            font-size: 1.4rem;
+        }
+        .rex-tool-title {
+            font-size: 1.05rem;
+        }
+
+        /* Métricas: que los números no se corten */
+        [data-testid="stMetricValue"] {
+            font-size: 1.35rem !important;
+        }
+        [data-testid="stMetricLabel"] {
+            font-size: 0.72rem !important;
+        }
+        [data-testid="stMetric"] {
+            padding: 0.85rem;
+        }
+
+        /* Tablas con scroll horizontal suave */
+        [data-testid="stDataFrame"] {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Botones con buen tamaño táctil */
+        .stButton > button, .stDownloadButton > button {
+            padding: 0.6rem 1.2rem;
+            font-size: 0.9rem;
+        }
+
+        /* Inputs más cómodos al tocar */
+        input, select, textarea {
+            font-size: 16px !important;  /* evita zoom automático en iOS */
+        }
+
+        /* Tabs más compactos */
+        [data-testid="stTabs"] button {
+            padding: 0.4rem 0.7rem;
+            font-size: 0.85rem;
+        }
+    }
+
+    /* Pantallas muy chicas (≤420px) */
+    @media (max-width: 420px) {
+        .rex-header-title {
+            display: none;  /* ocultar título, dejar logo + badge */
+        }
+        .rex-hero h1 {
+            font-size: 1.15rem;
+        }
+    }
 </style>
 """
 
