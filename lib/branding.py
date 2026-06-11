@@ -31,26 +31,39 @@ CSS_PERSONALIZADO = """
 
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
 
-    /* Mantener visible el botón para abrir/cerrar el sidebar (clave en móvil) */
-    [data-testid="stSidebarCollapsedControl"] {
+    /* Header: hacerlo transparente y mínimo, pero NO ocultarlo
+       (oculta solo el fondo, deja vivo el botón de toggle del sidebar) */
+    [data-testid="stHeader"] {
+        background: transparent !important;
+        height: 0 !important;
+    }
+    [data-testid="stToolbar"] {
+        visibility: hidden;
+    }
+
+    /* Botón de abrir/cerrar sidebar SIEMPRE visible y por encima de todo */
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    button[kind="header"] {
         visibility: visible !important;
         display: flex !important;
         z-index: 999999 !important;
+        background: #1EBBEF !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25) !important;
     }
-    [data-testid="collapsedControl"] {
-        visibility: visible !important;
-        display: flex !important;
-        z-index: 999999 !important;
-    }
-    [data-testid="stSidebarCollapseButton"] {
-        visibility: visible !important;
-        display: flex !important;
+    [data-testid="stExpandSidebarButton"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg,
+    button[kind="header"] svg {
+        color: white !important;
+        fill: white !important;
     }
 
     .main .block-container {
-        padding-top: 2rem !important;
+        padding-top: 3rem !important;
         padding-left: 2rem;
         padding-right: 2rem;
         max-width: 1400px;
