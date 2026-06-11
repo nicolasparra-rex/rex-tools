@@ -61,12 +61,25 @@ def get_proyectos_relevantes(access_token, portal_id):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_tareas_proyecto(access_token, portal_id, project_id):
+    """Trae TODAS las tareas del proyecto, paginando."""
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/{project_id}/tasks/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
-    r = requests.get(url, headers=headers, params={"range": 200})
-    if r.status_code != 200:
-        return []
-    return r.json().get("tasks", [])
+    todas = []
+    index = 1
+    while True:
+        r = requests.get(url, headers=headers, params={"range": 200, "index": index})
+        if r.status_code != 200:
+            break
+        batch = r.json().get("tasks", [])
+        if not batch:
+            break
+        todas.extend(batch)
+        if len(batch) < 200:
+            break
+        index += 200
+        if index > 2000:
+            break
+    return todas
 
 def parse_fecha(s):
     if not s:
@@ -81,7 +94,8 @@ def parse_fecha(s):
 
 @st.cache_data(ttl=600, show_spinner=True)
 def construir_agenda(_token, portal_id):
-    """Recorre proyectos relevantes y arma DataFrame de agenda."""
+    """Recorre proyectos relevantes y arma DataFrame de agenda.
+    Expande tareas multi-día a cada día del rango start→end."""
     proyectos = get_proyectos_relevantes(_token, portal_id)
     rows = []
     barra = st.progress(0.0, text="Cargando agendas...")
@@ -89,21 +103,32 @@ def construir_agenda(_token, portal_id):
     for i, p in enumerate(proyectos):
         tasks = get_tareas_proyecto(_token, portal_id, p["id"])
         for t in tasks:
-            fecha = parse_fecha(t.get("start_date_format", "") or t.get("start_date", ""))
-            if fecha is None:
+            f_ini = parse_fecha(t.get("start_date_format", "") or t.get("start_date", ""))
+            f_fin = parse_fecha(t.get("end_date_format", "") or t.get("end_date", ""))
+            if f_ini is None:
                 continue
+            if f_fin is None or f_fin < f_ini:
+                f_fin = f_ini
             owners = (t.get("details") or {}).get("owners", [])
-            for o in owners:
-                nombre = o.get("full_name") or o.get("name", "")
-                if not nombre or nombre.lower() in ("sin asignar", "unassigned"):
-                    continue
-                rows.append({
-                    "consultor": nombre,
-                    "fecha":     fecha,
-                    "tarea":     t.get("name", ""),
-                    "proyecto":  p["name"],
-                    "completada": t.get("completed", False),
-                })
+            owners_validos = [
+                (o.get("full_name") or o.get("name", ""))
+                for o in owners
+                if (o.get("full_name") or o.get("name", "")) and
+                   (o.get("full_name") or o.get("name", "")).lower() not in ("sin asignar", "unassigned")
+            ]
+            # Expandir a cada día hábil del rango de la tarea
+            d = f_ini
+            while d <= f_fin:
+                if d.weekday() < 5:  # solo días hábiles
+                    for nombre in owners_validos:
+                        rows.append({
+                            "consultor":  nombre,
+                            "fecha":      d,
+                            "tarea":      t.get("name", ""),
+                            "proyecto":   p["name"],
+                            "completada": t.get("completed", False),
+                        })
+                d += timedelta(days=1)
         barra.progress((i + 1) / total, text=f"Cargando agendas... {i+1}/{total}")
     barra.empty()
     return pd.DataFrame(rows)
@@ -184,9 +209,10 @@ for c in consultores:
     dias_ocupados = set(tareas_c["fecha"].unique())
     n_ocupados = len([d for d in dias_rango if d in dias_ocupados])
     n_libres   = len(dias_rango) - n_ocupados
+    n_sesiones = len(tareas_c.drop_duplicates(subset=["tarea", "proyecto"]))
     resumen.append({
         "Consultor":     c,
-        "Sesiones":      len(tareas_c),
+        "Sesiones":      n_sesiones,
         "Días ocupados": n_ocupados,
         "Días libres":   n_libres,
         "% ocupación":   round(n_ocupados / len(dias_rango) * 100) if dias_rango else 0,
@@ -217,7 +243,7 @@ DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
 for d in dias_rango:
     label = f"{DIAS[d.weekday()]} {d.strftime('%d/%m')}"
     if d in dias_ocupados_sel:
-        sesiones = tareas_sel[tareas_sel["fecha"] == d]
+        sesiones = tareas_sel[tareas_sel["fecha"] == d].drop_duplicates(subset=["tarea", "proyecto"])
         with st.expander(f"🔴 {label} — {len(sesiones)} sesión(es)", expanded=False):
             for _, s in sesiones.iterrows():
                 st.markdown(f"• **{s['tarea']}** · {s['proyecto']}")
