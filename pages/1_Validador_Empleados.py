@@ -748,10 +748,15 @@ def procesar_archivo(uploaded_file):
             antes = df[campo].copy()
             # Normalizar a minúscula
             df[campo] = df[campo].apply(convertir_email_minuscula)
-            # Completar vacíos
+            # Completar vacíos con {rut}@sincorreo.cl
             mask_vacios = df[campo].apply(_vacio).astype(bool)
             correcciones["emails_vacios_completados"] += int(mask_vacios.sum())
-            df.loc[mask_vacios, campo] = EMAIL_DEFAULT
+            if "Id empleado" in df.columns:
+                df.loc[mask_vacios, campo] = (
+                    df.loc[mask_vacios, "Id empleado"].astype(str).str.strip() + "@sincorreo.cl"
+                )
+            else:
+                df.loc[mask_vacios, campo] = EMAIL_DEFAULT
             # Contar los que se pasaron a minúscula (excluyendo los completados)
             cambios_case = (antes.fillna("") != df[campo].fillna("")) & ~mask_vacios
             correcciones["emails_minuscula"] += int(cambios_case.sum())
