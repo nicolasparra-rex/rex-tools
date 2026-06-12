@@ -305,7 +305,9 @@ def limpiar_nombre_calle(valor):
                      texto, flags=re.IGNORECASE)[0]
     # 3. Eliminar todos los números
     texto = re.sub(r"\d+", "", texto)
-    # 4. Normalizar espacios múltiples
+    # 4. Eliminar "N" suelta que queda de "N°" / "Nº"
+    texto = re.sub(r"\b[Nn]\b", "", texto)
+    # 5. Normalizar espacios múltiples
     texto = re.sub(r"\s+", " ", texto).strip()
     return texto
 
@@ -596,7 +598,16 @@ def corregir_ubicacion(codigo_comuna, region_escrita, ciudad_escrita):
 # ─────────────────────────────────────────────
 
 def procesar_archivo(uploaded_file):
-    df = pd.read_excel(uploaded_file, sheet_name="Empleados", dtype=str)
+    # Detectar automáticamente la fila de encabezados (algunos archivos
+    # traen una nota tipo "* Los campos obligatorios..." antes del header)
+    raw = pd.read_excel(uploaded_file, sheet_name="Empleados", dtype=str, header=None)
+    fila_header = 0
+    for i in range(min(10, len(raw))):
+        if raw.iloc[i].astype(str).str.strip().eq("Id empleado").any():
+            fila_header = i
+            break
+    df = raw.iloc[fila_header + 1:].reset_index(drop=True)
+    df.columns = [str(c).strip() if c is not None else "" for c in raw.iloc[fila_header]]
     total_original = len(df)
 
     # ───── Reparar caracteres corruptos (mojibake) en headers y celdas ─────
@@ -762,7 +773,7 @@ def procesar_archivo(uploaded_file):
     hoy = datetime.now()
 
     for idx, fila in df.iterrows():
-        num_fila = idx + 2  # +2 porque Excel empieza en 1 y tiene header
+        num_fila = idx + fila_header + 2  # +2 porque Excel empieza en 1 y tiene header
         campos_vacios = []
         errores_fila = []
 
