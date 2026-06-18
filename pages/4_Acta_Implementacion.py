@@ -101,6 +101,8 @@ def reset_notes():
         st.session_state[k] = ([] if isinstance(v, list)
                                else False if isinstance(v, bool)
                                else "")
+    # Incrementar contador para forzar nuevo file_uploader
+    st.session_state["uploader_key"] += 1
 
 def step_pill(num: int, label: str, done: bool = False):
     icon = "✓" if done else str(num)
@@ -124,6 +126,7 @@ for k, v in {
     "docx_bytes": None, "docx_filename": "",
     "edit_mode": False, "last_selected": "",
     "drive_files": None,
+    "uploader_key": 0,       # ← clave dinámica para el file_uploader
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -235,7 +238,6 @@ except Exception:
     _PORTAL_ID = "757079135"
     ZOHO_OK = False
 
-# Session state para OT
 for k, v in {"zoho_acta": {}, "last_ot_acta": "", "zoho_acta_msg": ()}.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -243,9 +245,6 @@ for k, v in {"zoho_acta": {}, "last_ot_acta": "", "zoho_acta_msg": ()}.items():
 # ── Layout ────────────────────────────────────────────────────────────────────
 col_form, col_right = st.columns([3, 2], gap="large")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# COLUMNA IZQUIERDA
-# ═══════════════════════════════════════════════════════════════════════════════
 with col_form:
 
     # ── BÚSQUEDA POR OT ───────────────────────────────────────────────────────
@@ -299,7 +298,7 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 1: Cliente ───────────────────────────────────────────────────────
+    # ── PASO 1 ────────────────────────────────────────────────────────────────
     step_pill(1, "Selecciona o ingresa el cliente",
               done=st.session_state.edit_mode is False and st.session_state.last_selected != "")
 
@@ -336,11 +335,10 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 2: Datos del cliente ─────────────────────────────────────────────
+    # ── PASO 2 ────────────────────────────────────────────────────────────────
     step_pill(2, "Datos del cliente")
     st.markdown("### Datos del cliente")
 
-    # Datos desde Zoho para nuevo cliente
     _z = st.session_state.zoho_acta
 
     empresa      = st.text_input("Empresa *",
@@ -384,7 +382,7 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 3: Equipo REX+ ───────────────────────────────────────────────────
+    # ── PASO 3 ────────────────────────────────────────────────────────────────
     step_pill(3, "Equipo REX+")
     st.markdown("### Equipo REX+")
 
@@ -408,27 +406,26 @@ with col_form:
         else:
             jefe_data      = next(m for m in jefes_list if m["nombre"] == jefe_sel)
             jefe_rex       = jefe_sel
-            email_jefe_rex = st.text_input("Email jefe", value=jefe_data["email"], key="email_jefe_exist")
+            # Clave dinámica → fuerza recarga al cambiar selección ← FIX EMAIL
+            email_jefe_rex = st.text_input("Email jefe",
+                                           value=jefe_data["email"],
+                                           key=f"email_jefe_{jefe_sel}")
             tel_jefe_rex   = st.text_input("Teléfono jefe",
                                            value=jefe_data.get("telefono", ""),
                                            placeholder="+56 9 XXXX XXXX",
-                                           key="tel_jefe_exist")
-            # Guardar teléfono si se ingresó
-            tel_guardado_j = jefe_data.get("telefono", "")
-            if tel_jefe_rex and tel_jefe_rex != tel_guardado_j:
+                                           key=f"tel_jefe_{jefe_sel}")
+            if tel_jefe_rex and tel_jefe_rex != jefe_data.get("telefono", ""):
                 if st.button("💾 Guardar teléfono jefe", key="save_tel_jefe", use_container_width=True):
                     update_equipo_telefono("jefes", jefe_sel, tel_jefe_rex)
-                    st.success("✓ Teléfono guardado.")
+                    st.toast("✓ Teléfono guardado.", icon="✅")
                     st.rerun()
 
     with col2:
         cons_opts    = ["— Nuevo —"] + consultores_nombres
-        # Preseleccionar desde Zoho si hay coincidencia
         consultor_zoho = st.session_state.zoho_acta.get("consultor", "")
         if client:
             cons_default = client["consultor"]
         elif consultor_zoho:
-            # Buscar coincidencia case-insensitive
             match = next((n for n in consultores_nombres if n.lower() == consultor_zoho.lower()), None)
             cons_default = match if match else (consultores_nombres[0] if consultores_nombres else "— Nuevo —")
         else:
@@ -443,17 +440,18 @@ with col_form:
         else:
             cons_data       = next(m for m in consultores_list if m["nombre"] == cons_sel)
             consultor       = cons_sel
-            email_consultor = st.text_input("Email consultor", value=cons_data["email"], key="email_cons_exist")
+            # Clave dinámica → fuerza recarga al cambiar selección ← FIX EMAIL
+            email_consultor = st.text_input("Email consultor",
+                                            value=cons_data["email"],
+                                            key=f"email_cons_{cons_sel}")
             tel_consultor   = st.text_input("Teléfono consultor",
                                             value=cons_data.get("telefono", ""),
                                             placeholder="+56 9 XXXX XXXX",
-                                            key="tel_cons_exist")
-            # Guardar teléfono si se ingresó
-            tel_guardado_c = cons_data.get("telefono", "")
-            if tel_consultor and tel_consultor != tel_guardado_c:
+                                            key=f"tel_cons_{cons_sel}")
+            if tel_consultor and tel_consultor != cons_data.get("telefono", ""):
                 if st.button("💾 Guardar teléfono consultor", key="save_tel_cons", use_container_width=True):
                     update_equipo_telefono("consultores", cons_sel, tel_consultor)
-                    st.success("✓ Teléfono guardado.")
+                    st.toast("✓ Teléfono guardado.", icon="✅")
                     st.rerun()
 
         horas = st.number_input("Horas de sesión", min_value=1, max_value=8,
@@ -464,13 +462,13 @@ with col_form:
         if jefe_sel == "— Nuevo —" and jefe_rex:
             if st.button("💾 Guardar jefe", use_container_width=True):
                 add_equipo_member("jefes", jefe_rex, email_jefe_rex, tel_jefe_rex)
-                st.success(f"✓ Jefe '{jefe_rex}' guardado.")
+                st.toast(f"✓ Jefe '{jefe_rex}' guardado.", icon="✅")
                 st.rerun()
     with col_gc:
         if cons_sel == "— Nuevo —" and consultor:
             if st.button("💾 Guardar consultor", use_container_width=True):
                 add_equipo_member("consultores", consultor, email_consultor, tel_consultor)
-                st.success(f"✓ Consultor '{consultor}' guardado.")
+                st.toast(f"✓ Consultor '{consultor}' guardado.", icon="✅")
                 st.rerun()
 
     with st.expander("🗑 Gestionar equipo guardado"):
@@ -492,7 +490,7 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 4: Sesión ────────────────────────────────────────────────────────
+    # ── PASO 4 ────────────────────────────────────────────────────────────────
     step_pill(4, "Datos de la sesión")
     st.markdown("### Datos de la sesión")
 
@@ -511,19 +509,18 @@ with col_form:
 
     st.divider()
 
-    # ── PASO 5: Asistentes ────────────────────────────────────────────────────
+    # ── PASO 5 ────────────────────────────────────────────────────────────────
     step_pill(5, "Asistentes a la sesión")
     st.markdown("### Asistentes a la sesión")
 
-    # Construir lista base desde el cliente guardado, o desde los campos actuales
     if client and client.get("asistentes"):
         default_asistentes = client["asistentes"]
     else:
         default_asistentes = [
             {"nombre": client["usuario_impl"] if client else usuario_impl, "cargo": "", "gerencia": ""},
             {"nombre": client["jefe_cliente"] if client else jefe_cliente,  "cargo": "", "gerencia": ""},
-            {"nombre": jefe_rex,   "cargo": "", "gerencia": ""},
-            {"nombre": consultor,  "cargo": "", "gerencia": ""},
+            {"nombre": jefe_rex,  "cargo": "", "gerencia": ""},
+            {"nombre": consultor, "cargo": "", "gerencia": ""},
         ]
 
     edited = st.data_editor(
@@ -576,9 +573,9 @@ with col_form:
                         nombre_display,
                         nombre_display.lower() if nombre_display else "",
                     ))
-                    st.success(f"✓ Cliente '{nombre_display}' guardado.")
+                    st.toast(f"✓ Cliente '{nombre_display}' guardado.", icon="✅")
                     st.session_state.edit_mode = False
-                    reset_notes()  # ← CAMBIO 1
+                    reset_notes()
                     st.rerun()
     elif st.session_state.edit_mode:
         if st.button("💾 Guardar cambios", use_container_width=True, type="primary"):
@@ -589,9 +586,9 @@ with col_form:
                     client["nombre_display"],
                     client.get("keyword_drive", ""),
                 ))
-                st.success(f"✓ Cambios guardados para **{client['nombre_display']}**.")
+                st.toast(f"✓ Cambios guardados para {client['nombre_display']}.", icon="✅")
                 st.session_state.edit_mode = False
-                reset_notes()  # ← CAMBIO 1
+                reset_notes()
                 st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -602,9 +599,12 @@ with col_right:
     step_pill(6, "Sube las notas de Gemini", done=st.session_state.notes_extracted)
     st.markdown("### Notas de sesión (Gemini)")
 
+    # Clave dinámica → permite subir el mismo archivo tras "Nueva acta" ← FIX UPLOADER
     notes_file = st.file_uploader(
         "Archivo .docx de la carpeta Meet Recordings",
-        type=["docx"], label_visibility="collapsed",
+        type=["docx"],
+        label_visibility="collapsed",
+        key=f"notes_uploader_{st.session_state.uploader_key}",
     )
     if notes_file and not st.session_state.notes_extracted:
         with st.spinner("Extrayendo contenido..."):
@@ -665,7 +665,6 @@ with col_right:
                         if str(row["nombre"]).strip()
                     ]
 
-                    # Auto-guardar asistentes en el cliente ← CAMBIO 4
                     if client and asistentes_list:
                         updated = dict(client)
                         updated["asistentes"] = asistentes_list
@@ -701,6 +700,7 @@ with col_right:
                                        else False if isinstance(v, bool)
                                        else "" if isinstance(v, str)
                                        else None)
+            st.session_state["uploader_key"] += 1  # ← fuerza nuevo uploader
             st.rerun()
 
 aplicar_footer()
