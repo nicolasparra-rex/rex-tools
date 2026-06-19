@@ -143,21 +143,22 @@ with st.sidebar:
 
     with st.expander("Puntos por tipo de servicio (sesiones)"):
         SESIONES_DEFAULT = {
+            "Portal": 0.25,
             "Centralización desde cero": 0.95,
-            "Centra M+": 0.45,
-            "Migración creando archivos": 1.00,
+            "Centralización M+": 0.45,
+            "Migración Archivos": 1.00,
+            "Organigrama": 0.85,
             "Escala y grados": 1.00,
             "Repaso": 0.55,
             "CDR": 0.65,
             "Tratos": 0.75,
-            "Organigrama": 0.85,
-            "Portal": 0.25,
-            "LME (Licencia Médica)": 0.35,
-            "Geo Victoria": 0.15,
-            "Conexión DT": 0.10,
-            "Comunicación": 0.05,
-            "Adm": 0.075,
-            "Geco": 1.25,
+            "LME": 0.35,
+            "Geo victoria": 0.15,
+            "Conexion a la DT": 0.10,
+            "Comunicaciones y Bene": 0.05,
+            "Trabajo Adm": 0.075,
+            "Gecos": 1.25,
+            "Smart Rex": 0.20,
         }
         puntos_sesion = {}
         for nombre, dv in SESIONES_DEFAULT.items():
