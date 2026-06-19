@@ -2,20 +2,22 @@
 Bono Consultores — pagina independiente y sensible.
 
 Aislada a proposito: no importa nada de las otras paginas, tiene su propio
-set_page_config y un candado de acceso. Trabaja sobre el export de Zoho
-(.xlsx) que ya generas. El calculo queda estructurado para enchufar la API
-de Zoho Projects mas adelante (ver seccion cargar_proyectos()).
+set_page_config y un candado de acceso. Lee proyectos directo desde la API de
+Zoho Projects (reusa el patron OAuth de 8_Zoho_Proyectos) y deja como respaldo
+la carga del export .xlsx.
 
-Para soltar en rex-tools: copiar a pages/. Para ocultarlo del menu lateral,
-ver nota al final del archivo.
+Para soltar en rex-tools: copiar a pages/. Requiere en secrets.toml:
+ZOHO_REFRESH_TOKEN, ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET (y opcional ZOHO_PORTAL_ID).
 """
 
 import io
 import re
+import json
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
+import requests
 import streamlit as st
 
 st.set_page_config(page_title="Bono Consultores", page_icon="🔒", layout="wide")
@@ -120,15 +122,130 @@ def cargar_proyectos(uploaded) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------
+# 3b. Fuente Zoho Projects (API REST) — reusa el patrón de 8_Zoho_Proyectos
+# --------------------------------------------------------------------------
+@st.cache_data(ttl=3000, show_spinner=False)
+def _zoho_token(refresh_token, client_id, client_secret):
+    r = requests.post("https://accounts.zoho.com/oauth/v2/token", params={
+        "refresh_token": refresh_token, "client_id": client_id,
+        "client_secret": client_secret, "grant_type": "refresh_token",
+    })
+    return r.json().get("access_token")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _zoho_projects(access_token, portal_id, status):
+    """Pagina de 100 en 100 los proyectos de un status dado."""
+    url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/"
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    out, index = [], 1
+    while True:
+        r = requests.get(url, headers=headers,
+                         params={"status": status, "range": 100, "index": index})
+        try:
+            batch = r.json().get("projects", [])
+        except Exception:
+            break
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < 100:
+            break
+        index += 100
+    return out
+
+
+def _cf_dict(custom_fields):
+    d = {}
+    if isinstance(custom_fields, list):
+        for it in custom_fields:
+            if isinstance(it, dict):
+                d.update(it)
+    return d
+
+
+def _cf(fields, *keys):
+    for k in keys:
+        if k in fields and fields[k] not in (None, "", "false", False):
+            val = fields[k]
+            if isinstance(val, str) and val.startswith("["):
+                try:
+                    parsed = json.loads(val)
+                    return ", ".join(parsed) if isinstance(parsed, list) else val
+                except Exception:
+                    pass
+            return val
+    return ""
+
+
+def _fmt_date(d):
+    """Normaliza fechas de Zoho (formato US u otros) a dd/mm/aaaa."""
+    if not d or str(d).strip() in ("–", "-", ""):
+        return ""
+    s = str(d).strip()
+    # timestamps en milisegundos
+    if s.isdigit() and len(s) >= 12:
+        try:
+            return datetime.fromtimestamp(int(s) / 1000).strftime("%d/%m/%Y")
+        except Exception:
+            pass
+    for fmt in ("%m-%d-%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%d/%m/%Y")
+        except Exception:
+            pass
+    return s
+
+
+def cargar_proyectos_zoho() -> pd.DataFrame:
+    """Trae proyectos desde Zoho y arma el mismo DataFrame que el Excel."""
+    portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
+    token = _zoho_token(
+        st.secrets["ZOHO_REFRESH_TOKEN"],
+        st.secrets["ZOHO_CLIENT_ID"],
+        st.secrets["ZOHO_CLIENT_SECRET"],
+    )
+    if not token:
+        st.error("No se pudo obtener el token de Zoho. Revisa los secrets.")
+        st.stop()
+
+    proyectos = _zoho_projects(token, portal_id, "active")
+    try:                                   # los cerrados viejos pueden estar archivados
+        proyectos += _zoho_projects(token, portal_id, "archived")
+    except Exception:
+        pass
+
+    vistos, filas = set(), []
+    for p in proyectos:
+        pid = str(p.get("id", ""))
+        if pid in vistos:
+            continue
+        vistos.add(pid)
+        cf = _cf_dict(p.get("custom_fields", []))
+        filas.append({
+            "ID DEL PROYECTO": p.get("key", "") or pid,
+            "CONSULTOR 1": _cf(cf, "Consultor 1", "consultor_1"),
+            "CANTIDAD DE EMPLEADOS": _cf(cf, "Cantidad de empleados", "cantidad_de_empleados"),
+            "ESTADO": p.get("custom_status_name") or p.get("status", ""),
+            "GRUPO DE PROYECTOS": p.get("group_name", ""),
+            "FECHA FINAL": _fmt_date(p.get("end_date", "")),
+            "FECHA FACTURACIÓN": _fmt_date(_cf(cf, "Fecha Facturación", "Fecha Facturacion", "fecha_facturacion")),
+            "FECHA FIN 1": _fmt_date(_cf(cf, "Fecha Fin 1", "fecha_fin_1")),
+            "Tipo de servicio": _cf(cf, "Tipo de Servicio", "Tipo de servicio", "Lista de Selección", "lista_de_seleccion"),
+        })
+    return pd.DataFrame(filas)
+
+
+# --------------------------------------------------------------------------
 # 4. Configuracion (sidebar)
 # --------------------------------------------------------------------------
 st.title("Cálculo de Bono Consultores")
-st.caption("Página aislada · v1 sobre export de Zoho · factor de fechas configurable")
+st.caption("Página aislada · Zoho en vivo + respaldo Excel · factor de fechas configurable")
 
 with st.sidebar:
     st.header("⚙️ Parámetros")
 
-    st.subheader("Período (sobre Fecha Final)")
+    st.subheader("Período (sobre fecha real de término)")
     f_ini = st.date_input("Desde", value=date(2026, 1, 1), format="DD/MM/YYYY")
     f_fin = st.date_input("Hasta", value=date(2026, 3, 31), format="DD/MM/YYYY")
     solo_cerrados = st.checkbox("Solo proyectos Cerrados", value=True)
@@ -177,9 +294,9 @@ with st.sidebar:
     p3 = st.number_input(f"% más de {c2} días", value=25, step=5) / 100
 
     st.subheader("Factor de fechas")
-    peso_a = st.slider("Peso Métrica A (cierre vs facturación)", 0.0, 1.0, 0.40, 0.05)
+    peso_a = st.slider("Peso Métrica A (término real vs facturación)", 0.0, 1.0, 0.40, 0.05)
     peso_b = round(1 - peso_a, 2)
-    st.caption(f"Peso Métrica B (cierre vs plan Fin 1) = {peso_b:.2f}")
+    st.caption(f"Peso Métrica B (término real vs plan original) = {peso_b:.2f}")
     piso = st.slider("Piso del factor", 0.0, 1.0, 0.70, 0.05)
 
     st.subheader("Tramos de bono (puntos → monto)")
@@ -232,7 +349,23 @@ def puntos_por_tipo(tipo):
 # --------------------------------------------------------------------------
 # 5. Carga de datos
 # --------------------------------------------------------------------------
-uploaded = st.file_uploader("Sube el export de proyectos de Zoho (.xlsx)", type=["xlsx"])
+fuente = st.radio("Fuente de datos", ["Zoho (en vivo)", "Subir Excel"], horizontal=True)
+
+raw = None
+if fuente == "Zoho (en vivo)":
+    cc1, cc2 = st.columns([6, 1])
+    with cc2:
+        if st.button("🔄 Refrescar", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    with st.spinner("Conectando con Zoho Projects..."):
+        raw = cargar_proyectos_zoho()
+    st.caption(f"{len(raw)} proyectos traídos desde Zoho (todos los estados).")
+else:
+    uploaded = st.file_uploader("Sube el export de proyectos de Zoho (.xlsx)", type=["xlsx"])
+    if uploaded is not None:
+        raw = cargar_proyectos(uploaded)
+
 adic_text = st.text_area(
     "Ajuste manual de puntos por consultor (opcional) — formato `Nombre: puntos`, uno por línea. "
     "Úsalo solo para correcciones puntuales; las sesiones se calculan solas desde Tipo de servicio.",
@@ -249,11 +382,9 @@ for line in adic_text.splitlines():
         except ValueError:
             pass
 
-if uploaded is None:
-    st.info("Esperando el archivo para calcular.")
+if raw is None or len(raw) == 0:
+    st.info("Esperando datos para calcular (elige Zoho en vivo o sube el Excel).")
     st.stop()
-
-raw = cargar_proyectos(uploaded)
 
 col_id = find_col(raw, "ID DEL PROYECTO")
 col_emp = find_col(raw, "CANTIDAD DE EMPLEADOS")
@@ -266,8 +397,9 @@ col_grupo = find_col(raw, "GRUPO DE PROYECTOS")
 col_tipo = find_col(raw, "TIPO DE SERVICIO")
 
 faltan = [n for n, c in {
-    "ID": col_id, "Empleados": col_emp, "Consultor 1": col_cons,
-    "Fecha Final": col_final}.items() if c is None]
+    "ID": col_id, "Empleados": col_emp, "Consultor 1": col_cons}.items() if c is None]
+if col_fin1 is None and col_final is None:
+    faltan.append("Fecha de término (Fin 1 / Final)")
 if faltan:
     st.error(f"No encontré columnas requeridas: {', '.join(faltan)}")
     st.stop()
@@ -277,9 +409,13 @@ df["id"] = raw[col_id]
 df["consultor"] = raw[col_cons].apply(clean_consultor)
 df["empleados"] = raw[col_emp].apply(parse_empleados)
 df["estado"] = raw[col_estado] if col_estado else ""
-df["f_final"] = raw[col_final].apply(parse_date)
+# Semántica confirmada con Nico:
+#   FECHA FIN 1  = término REAL (cuándo se cerró)        -> f_termino
+#   FECHA FINAL  = fecha planificada original             -> f_plan
+#   FECHA FACTURACIÓN                                      -> f_fact
+df["f_termino"] = raw[col_fin1].apply(parse_date) if col_fin1 else raw[col_final].apply(parse_date)
+df["f_plan"] = raw[col_final].apply(parse_date) if col_final else pd.NaT
 df["f_fact"] = raw[col_fact].apply(parse_date) if col_fact else pd.NaT
-df["f_fin1"] = raw[col_fin1].apply(parse_date) if col_fin1 else pd.NaT
 df["grupo"] = raw[col_grupo].astype(str).str.strip() if col_grupo else ""
 df["tipo"] = raw[col_tipo].astype(str).str.strip() if col_tipo else ""
 
@@ -316,8 +452,8 @@ if not grupos_dot and not grupos_ses:
 if grupos_ses and col_tipo is None:
     st.info("Aún no encuentro la columna 'Tipo de servicio' en el export; las sesiones sumarán 0 hasta que la cargues en Zoho.")
 
-# filtros base (período + estado + consultor)
-base = df["f_final"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))
+# filtros base (período sobre término real + estado + consultor)
+base = df["f_termino"].between(pd.Timestamp(f_ini), pd.Timestamp(f_fin))
 if solo_cerrados and col_estado:
     base &= df["estado"].apply(lambda s: _norm(s) == "CERRADO")
 base &= df["consultor"].astype(bool)
@@ -335,9 +471,11 @@ df["puntos_proy"] = df.apply(
 df["puntos_ses"] = df.apply(
     lambda r: 0.0 if r["es_dotacion"] else puntos_por_tipo(r["tipo"]), axis=1)
 
-# las métricas de fecha solo aplican a proyectos de dotación (plazos comprometidos)
-df["delta_A"] = (df["f_final"] - df["f_fact"]).dt.days.where(df["es_dotacion"])
-df["delta_B"] = (df["f_final"] - df["f_fin1"]).dt.days.where(df["es_dotacion"])
+# métricas de fecha (solo proyectos de dotación):
+#   A = término real − facturación  (ideal terminar antes de facturar)
+#   B = término real − plan original (ideal terminar en o antes de lo planificado)
+df["delta_A"] = (df["f_termino"] - df["f_fact"]).dt.days.where(df["es_dotacion"])
+df["delta_B"] = (df["f_termino"] - df["f_plan"]).dt.days.where(df["es_dotacion"])
 df["pct_A"] = df["delta_A"].apply(pct_por_delta)
 df["pct_B"] = df["delta_B"].apply(pct_por_delta)
 
@@ -397,13 +535,14 @@ c1m.metric("Consultores", len(resumen))
 c2m.metric("Proyectos considerados", len(df))
 c3m.metric("Total a pagar", f"${resumen['Bono final'].sum():,.0f}".replace(",", "."))
 
-n_sin_fact = int(df["delta_A"].isna().sum())
-n_sin_fin1 = int(df["delta_B"].isna().sum())
-if n_sin_fact or n_sin_fin1:
+dot = df[df["es_dotacion"]]
+n_sin_fact = int(dot["delta_A"].isna().sum())
+n_sin_plan = int(dot["delta_B"].isna().sum())
+if n_sin_fact or n_sin_plan:
     st.warning(
-        f"Datos incompletos en Zoho: {n_sin_fact} proyectos sin fecha de facturación "
-        f"y {n_sin_fin1} sin Fin 1 (esos se excluyen de su métrica, no penalizan). "
-        "Para automatizar de forma confiable, vuelve obligatorios esos campos al cerrar."
+        f"De los proyectos de dotación: {n_sin_fact} sin fecha de facturación "
+        f"y {n_sin_plan} sin plan original (Fecha Final). Esos se excluyen de su "
+        "métrica, no penalizan. Para un cálculo confiable, vuelve obligatorios esos campos al cerrar."
     )
 
 st.subheader("Resumen por consultor")
@@ -411,9 +550,11 @@ st.dataframe(resumen, use_container_width=True, hide_index=True)
 
 st.subheader("Detalle por proyecto")
 detalle = df[["id", "consultor", "grupo", "tipo", "empleados", "rango",
-              "puntos_proy", "puntos_ses", "f_fact", "f_final", "f_fin1",
+              "puntos_proy", "puntos_ses", "f_fact", "f_termino", "f_plan",
               "delta_A", "delta_B", "pct_A", "pct_B"]].copy()
-for c in ["f_fact", "f_final", "f_fin1"]:
+detalle = detalle.rename(columns={
+    "f_termino": "Término real", "f_plan": "Plan original", "f_fact": "Facturación"})
+for c in ["Facturación", "Término real", "Plan original"]:
     detalle[c] = detalle[c].dt.strftime("%d/%m/%Y")
 detalle["pct_A"] = (detalle["pct_A"] * 100).round(0)
 detalle["pct_B"] = (detalle["pct_B"] * 100).round(0)
