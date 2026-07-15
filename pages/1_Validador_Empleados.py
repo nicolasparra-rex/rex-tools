@@ -615,7 +615,9 @@ def procesar_archivo(uploaded_file):
     mojibake_reparados = 0
     df.columns = [reparar_mojibake(c) for c in df.columns]
     for col in df.columns:
-        if df[col].dtype == object:  # solo columnas de texto
+        # pandas >= 3: read_excel(dtype=str) produce dtype "str" (no "object"),
+        # por lo que el chequeo antiguo `== object` saltaba todas las columnas
+        if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
             antes = df[col].copy()
             df[col] = df[col].apply(reparar_mojibake)
             mojibake_reparados += int((antes.fillna("") != df[col].fillna("")).sum())
@@ -747,7 +749,10 @@ def procesar_archivo(uploaded_file):
         if campo in df.columns:
             antes = df[campo].copy()
             # Normalizar a minúscula
-            df[campo] = df[campo].apply(convertir_email_minuscula)
+            # .astype("object") evita que pandas re-infiera la columna como
+            # float64 cuando viene 100% vacía (todos NaN), lo que rompía la
+            # asignación de placeholders más abajo en pandas >= 3
+            df[campo] = df[campo].apply(convertir_email_minuscula).astype("object")
             # Completar vacíos con {rut}@sincorreo.cl
             mask_vacios = df[campo].apply(_vacio).astype(bool)
             correcciones["emails_vacios_completados"] += int(mask_vacios.sum())
