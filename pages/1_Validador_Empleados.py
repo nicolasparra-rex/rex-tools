@@ -645,6 +645,7 @@ def procesar_archivo(uploaded_file):
         "estados_civiles_normalizados": 0,
         "tipos_contrato_normalizados": 0,
         "monedas_normalizadas": 0,
+        "valores_defecto_completados": 0,
     }
 
     # Lista de correcciones de ubicación hechas (para el reporte)
@@ -661,6 +662,21 @@ def procesar_archivo(uploaded_file):
         df["Id centro de costo"] = "sinDefinir"
     if "Id sede donde se desempeña" in df.columns:
         df["Id sede donde se desempeña"] = "sinDefinir"
+
+    # ───── Valores por defecto para campos vacíos ─────
+    DEFAULTS_CAMPOS = {
+        "Licencia de conducir": "N",
+        "Profesión":            "sinDefinir",
+        "Nivel de estudio":     "0",
+    }
+    for campo, valor_defecto in DEFAULTS_CAMPOS.items():
+        if campo in df.columns:
+            # .astype("object") evita que una columna 100% vacía (float64 en
+            # pandas >= 3) rechace la asignación de strings
+            df[campo] = df[campo].astype("object")
+            mask_def = df[campo].apply(_vacio).astype(bool)
+            df.loc[mask_def, campo] = valor_defecto
+            correcciones["valores_defecto_completados"] += int(mask_def.sum())
 
     # ───── Fechas ─────
     for campo in campos_fecha:
@@ -986,6 +1002,13 @@ if archivo:
             c1, c2 = st.columns(2)
             c1.metric("🏦 AFP normalizadas",            correcciones["afp_normalizadas"])
             c2.metric("🏥 Salud normalizadas",          correcciones["salud_normalizadas"])
+
+            if correcciones["valores_defecto_completados"] > 0:
+                st.info(
+                    f"📝 Se completaron **{correcciones['valores_defecto_completados']}** celda(s) "
+                    f"vacías con valores por defecto (Licencia de conducir: N · "
+                    f"Profesión: sinDefinir · Nivel de estudio: 0)."
+                )
 
             if correcciones["caracteres_reparados"] > 0:
                 st.info(
