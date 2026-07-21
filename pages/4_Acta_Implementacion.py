@@ -101,7 +101,6 @@ def reset_notes():
         st.session_state[k] = ([] if isinstance(v, list)
                                else False if isinstance(v, bool)
                                else "")
-    # Incrementar contador para forzar nuevo file_uploader
     st.session_state["uploader_key"] += 1
 
 def step_pill(num: int, label: str, done: bool = False):
@@ -126,7 +125,8 @@ for k, v in {
     "docx_bytes": None, "docx_filename": "",
     "edit_mode": False, "last_selected": "",
     "drive_files": None,
-    "uploader_key": 0,       # ← clave dinámica para el file_uploader
+    "uploader_key": 0,
+    "nombre_display_input": "",
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -159,11 +159,10 @@ def _listar_ots(access_token, portal_id):
             status = p.get("custom_status_name", "")
             if status.lower() in ESTADOS:
                 cfields = _parse_cf(p.get("custom_fields", []))
-                consultor_raw = _cf(cfields, "Consultor 1")
                 rows.append({
                     "OT":        p.get("key", ""),
                     "Proyecto":  p.get("name", ""),
-                    "Consultor": consultor_raw,
+                    "Consultor": _cf(cfields, "Consultor 1"),
                     "Estado":    status,
                 })
         if len(batch) < 100:
@@ -217,12 +216,12 @@ def _extraer_zoho(proyecto):
         return {}
     cfields = _parse_cf(proyecto.get("custom_fields", []))
     return {
-        "empresa":          _cf(cfields, "Razón social"),
-        "jefe":             _cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
-        "correo":           _cf(cfields, "Correo del contacto"),
-        "telefono":         _cf(cfields, "Telefono de contacto"),
-        "consultor":        _cf(cfields, "Consultor 1"),
-        "nombre_proyecto":  proyecto.get("name", ""),
+        "empresa":         _cf(cfields, "Razón social"),
+        "jefe":            _cf(cfields, "Jefe de Proyecto Cliente (Contacto)"),
+        "correo":          _cf(cfields, "Correo del contacto"),
+        "telefono":        _cf(cfields, "Telefono de contacto"),
+        "consultor":       _cf(cfields, "Consultor 1"),
+        "nombre_proyecto": proyecto.get("name", ""),
     }
 
 try:
@@ -280,13 +279,13 @@ with col_form:
             proyecto = _buscar_ot(_token, _PORTAL_ID, ot_input)
         if proyecto:
             datos = _extraer_zoho(proyecto)
-            st.session_state.zoho_acta      = datos
-            st.session_state.last_ot_acta   = ot_input
-            st.session_state.zoho_acta_msg  = ("ok", f"✅ Proyecto encontrado: **{datos['nombre_proyecto']}**")
+            st.session_state.zoho_acta     = datos
+            st.session_state.last_ot_acta  = ot_input
+            st.session_state.zoho_acta_msg = ("ok", f"✅ Proyecto encontrado: **{datos['nombre_proyecto']}**")
         else:
-            st.session_state.zoho_acta      = {}
-            st.session_state.last_ot_acta   = ot_input
-            st.session_state.zoho_acta_msg  = ("warn", f"⚠️ No se encontró proyecto con OT **{ot_input}**.")
+            st.session_state.zoho_acta     = {}
+            st.session_state.last_ot_acta  = ot_input
+            st.session_state.zoho_acta_msg = ("warn", f"⚠️ No se encontró proyecto con OT **{ot_input}**.")
         st.rerun()
 
     if st.session_state.zoho_acta_msg:
@@ -406,7 +405,6 @@ with col_form:
         else:
             jefe_data      = next(m for m in jefes_list if m["nombre"] == jefe_sel)
             jefe_rex       = jefe_sel
-            # Clave dinámica → fuerza recarga al cambiar selección ← FIX EMAIL
             email_jefe_rex = st.text_input("Email jefe",
                                            value=jefe_data["email"],
                                            key=f"email_jefe_{jefe_sel}")
@@ -421,7 +419,7 @@ with col_form:
                     st.rerun()
 
     with col2:
-        cons_opts    = ["— Nuevo —"] + consultores_nombres
+        cons_opts      = ["— Nuevo —"] + consultores_nombres
         consultor_zoho = st.session_state.zoho_acta.get("consultor", "")
         if client:
             cons_default = client["consultor"]
@@ -430,8 +428,8 @@ with col_form:
             cons_default = match if match else (consultores_nombres[0] if consultores_nombres else "— Nuevo —")
         else:
             cons_default = consultores_nombres[0] if consultores_nombres else "— Nuevo —"
-        cons_idx     = cons_opts.index(cons_default) if cons_default in cons_opts else 0
-        cons_sel     = st.selectbox("Consultor REX", cons_opts, index=cons_idx)
+        cons_idx = cons_opts.index(cons_default) if cons_default in cons_opts else 0
+        cons_sel = st.selectbox("Consultor REX", cons_opts, index=cons_idx)
 
         if cons_sel == "— Nuevo —":
             consultor       = st.text_input("Nombre consultor *", placeholder="NOMBRE APELLIDO")
@@ -440,7 +438,6 @@ with col_form:
         else:
             cons_data       = next(m for m in consultores_list if m["nombre"] == cons_sel)
             consultor       = cons_sel
-            # Clave dinámica → fuerza recarga al cambiar selección ← FIX EMAIL
             email_consultor = st.text_input("Email consultor",
                                             value=cons_data["email"],
                                             key=f"email_cons_{cons_sel}")
@@ -535,7 +532,7 @@ with col_form:
 
     st.divider()
 
-    # ── Guardar cliente ───────────────────────────────────────────────────────
+    # ── Guardar cliente ── FUERA del expander ─────────────────────────────────
     def client_payload(nombre_display="", keyword_drive=""):
         asistentes_actuales = [
             {"nombre": str(row["nombre"]), "cargo": str(row.get("cargo", "")),
@@ -562,21 +559,27 @@ with col_form:
         }
 
     if is_new:
-        with st.expander("💾 Guardar nuevo cliente"):
-            nombre_display = st.text_input("Nombre corto del cliente",
-                                           value="", placeholder="Ej: CYGNUS")
-            if st.button("Guardar cliente", use_container_width=True, type="primary"):
-                if not empresa:
-                    st.error("Ingresa el nombre de la empresa.")
-                else:
-                    save_client(client_payload(
-                        nombre_display,
-                        nombre_display.lower() if nombre_display else "",
-                    ))
-                    st.toast(f"✓ Cliente '{nombre_display}' guardado.", icon="✅")
-                    st.session_state.edit_mode = False
-                    reset_notes()
-                    st.rerun()
+        st.markdown("#### 💾 Guardar nuevo cliente")
+        nombre_display = st.text_input("Nombre corto del cliente",
+                                       value=st.session_state.nombre_display_input,
+                                       placeholder="Ej: MINIMAL",
+                                       key="nombre_display_field")
+        if st.button("Guardar cliente", use_container_width=True, type="primary"):
+            if not empresa:
+                st.error("Ingresa el nombre de la empresa en el Paso 2.")
+            elif not nombre_display:
+                st.error("Ingresa el nombre corto del cliente.")
+            else:
+                save_client(client_payload(
+                    nombre_display,
+                    nombre_display.lower(),
+                ))
+                st.toast(f"✓ Cliente '{nombre_display}' guardado.", icon="✅")
+                st.session_state.nombre_display_input = ""
+                st.session_state.edit_mode = False
+                reset_notes()
+                st.rerun()
+
     elif st.session_state.edit_mode:
         if st.button("💾 Guardar cambios", use_container_width=True, type="primary"):
             if not empresa:
@@ -599,7 +602,6 @@ with col_right:
     step_pill(6, "Sube las notas de Gemini", done=st.session_state.notes_extracted)
     st.markdown("### Notas de sesión (Gemini)")
 
-    # Clave dinámica → permite subir el mismo archivo tras "Nueva acta" ← FIX UPLOADER
     notes_file = st.file_uploader(
         "Archivo .docx de la carpeta Meet Recordings",
         type=["docx"],
@@ -700,7 +702,7 @@ with col_right:
                                        else False if isinstance(v, bool)
                                        else "" if isinstance(v, str)
                                        else None)
-            st.session_state["uploader_key"] += 1  # ← fuerza nuevo uploader
+            st.session_state["uploader_key"] += 1
             st.rerun()
 
 aplicar_footer()
