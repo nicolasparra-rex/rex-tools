@@ -237,6 +237,39 @@ COLS_APORTES_EMPLEADOR = [
     "APVC - Aporte Empleador(4157)"
 ]
 
+# Mapeo de columnas formato Rex+ → formato LRE esperado por el programa
+COLS_REXPLUS_TO_LRE = {
+    "Id empleado":                          "Rut trabajador (1101)",
+    "Nro días trabajados":                  "Nro días trabajados en el mes(1115)",
+    "Nro días de licencia médica":          "Nro días de licencia médica en el mes(1116)",
+    "Recargo 30% día domingo (Art. 38) (2107)":                                             "Recargo 30% día domingo(2107)",
+    "Remuneración variable pagada en vacaciones (Art 71) (cód 2108)":                       "Remun. variable pagada en vacaciones(2108)",
+    "Tratos (mensual) (cód 2112)":          "Tratos(2112)",
+    "Bonos u otras remuneraciones variables mensuales o superiores a un mes (cód 2113)":    "Bonos u otras remun. variables mensuales o superiores a un mes(2113)",
+    "Beneficios en especie constitutivos de remuneración (cód 2115)":                       "Beneficios en especie constitutivos de remun(2115)",
+    "Otras remuneraciones superiores a un mes (cód 2123)":                                  "Otras remuneraciones superiores a un mes(2123)",
+    "Pago por horas de trabajo sindical (cód 2124)":                                        "Pago por horas de trabajo sindical(2124)",
+    "Beca de estudio (Art. 17 N°18 LIR) (cód 2202)":                                       "Beca de estudio(2202)",
+    "Otros ingresos no constitutivos de renta (Art 17 N°29 LIR) (cód 2204)":               "Otros ingresos no constitutivos de renta(2204)",
+    "Viáticos totales mensual (Art 41) (cód 2303)":                                         "Viáticos(2303)",
+    "Gastos por causa del trabajo (Art 41 CdT) y gastos de representación (Art. 42 Nº1 LIR) (cód 2306)": "Gastos por causa del trabajo(2306)",
+    "Sala cuna (Art 203) (cód 2308)":       "Sala cuna(2308)",
+    "Alojamiento por razones de trabajo (2310)":                                            "Alojamiento por razones de trabajo(2310)",
+    "Indemnización fuero maternal (Art 163 bis) (cód 2316)":                                "Indemnización fuero maternal(2316)",
+    "Indemnización a todo evento (Art.164) (cód 2331)":                                     "Pago indemnización a todo evento(2331)",
+    "Indemnizaciones voluntarias tributables (cód 2417)":                                   "Indemnizaciones voluntarias tributables(2417)",
+    "Indemnizaciones contractuales tributables (cód 2418)":                                 "Indemnizaciones contractuales tributables(2418)",
+    "Cotización adicional trabajo pesado- trabajador (cód 3154)":                           "Cotización adicional trabajo pesado - trabajador(3154)",
+    "Impuesto retenido por indemnizaciones (cód 3162)":                                     "Impuesto retenido por indemnizaciones(3162)",
+    "Mayor retención de impuesto solicitada por el trabajador (cód 3163)":                  "Mayor retención de impuestos solicitada por el trabajador(3163)",
+    "Impuesto retenido por reliquidación de remuneraciones devengadas en otros períodos mensuales (cód 3164)": "Impuesto retenido por reliquidación remun. devengadas otros períodos(3164)",
+    "Cuota vivienda o educación Art. 58 (cód 3181)":                                        "Cuota vivienda o educación(3181)",
+    "Crédito cooperativas de ahorro (Art 54 Ley Coop.) (cód 3182)":                         "Crédito cooperativas de ahorro(3182)",
+    "Otros descuentos autorizados y solicitados por el trabajador (cód 3183)":              "Otros descuentos autorizados y solicitados por el trabajador(3183)",
+    "Aporte adicional trabajo pesado- empleador (cód 4154)":                                "Aporte adicional trabajo pesado - empleador(4154)",
+    "Mutual":                               "Org. administrador ley 16.744(1152)",
+}
+
 GRUPOS_AFP = {
     "afp", "reliquidaAfp", "afpAhor", "cesEmpleado", "reliquidaCesEmpl",
     "trabajoPesaEmpl", "voluntarioCoti", "voluntarioAhor", "reliquidaTrabEmpl",
@@ -463,12 +496,59 @@ def validar_estructura(df, columnas_requeridas):
 
 
 def validar_archivos(archivos_subidos):
-    """Valida que todos los archivos sean de la misma empresa."""
+    """Valida que todos los archivos sean de la misma empresa.
+    Para formato LRE (nombre empieza con dígito) compara prefijo de 10 chars.
+    Para formato Rex+ (nombre libre) omite la validación por nombre."""
     nombres = [f.name for f in archivos_subidos]
     prefijos = [n[:10] for n in nombres]
+    # Solo aplica si el nombre sigue convención RUT empresa (empieza con dígito)
+    if not nombres[0][0].isdigit():
+        return True, prefijos
     if len(set(prefijos)) > 1:
         return False, prefijos
     return True, prefijos
+
+def detectar_formato_rexplus(df):
+    """Retorna True si el CSV es formato Rex+ (tiene 'Id empleado' en lugar de 'Rut trabajador (1101)')."""
+    return "Id empleado" in df.columns and "Rut trabajador (1101)" not in df.columns
+
+def normalizar_rexplus(df):
+    """
+    Normaliza un DataFrame formato Rex+ al formato LRE que espera el programa.
+    Retorna (df_normalizado, df_listado_empleados).
+    """
+    df = df.copy()
+
+    # Convertir separador decimal de coma a punto en columnas numéricas
+    for col in df.select_dtypes(include="object").columns:
+        convertida = df[col].astype(str).str.replace(",", ".", regex=False)
+        convertida_num = pd.to_numeric(convertida, errors="coerce")
+        # Solo reemplazar si la mayoría de valores son numéricos
+        if convertida_num.notna().sum() > df[col].notna().sum() * 0.5:
+            df[col] = convertida_num
+
+    # Combinar AFC empleador solidario + individual → AFC - Aporte empleador(4151)
+    col_sol = "AFC - Aporte empleador solidario"
+    col_ind = "AFC - Aporte empleador individual"
+    if col_sol in df.columns or col_ind in df.columns:
+        df["AFC - Aporte empleador(4151)"] = (
+            pd.to_numeric(df.get(col_sol, 0), errors="coerce").fillna(0) +
+            pd.to_numeric(df.get(col_ind, 0), errors="coerce").fillna(0)
+        )
+        df.drop(columns=[c for c in [col_sol, col_ind] if c in df.columns], inplace=True)
+
+    # Construir listado_empleados antes de renombrar columnas
+    df_empl = pd.DataFrame({
+        "Rut":     df["Id empleado"].astype(str),
+        "AFP":     df["afp"].astype(str) if "afp" in df.columns else "",
+        "Isapre":  df["isapre"].astype(str) if "isapre" in df.columns else "",
+        "Empresa": df["Id de empresa"].astype(str) if "Id de empresa" in df.columns else "",
+    })
+
+    # Renombrar columnas al estándar LRE
+    df.rename(columns=COLS_REXPLUS_TO_LRE, inplace=True)
+
+    return df, df_empl
 
 def calcular_totales(df):
     """Calcula los 5 totales pre-validación."""
@@ -556,14 +636,20 @@ def generar_filas_salida(df, fecha_proceso, refs):
     if not equiv.empty and "cod_lre" in equiv.columns and "concepto_detalle" in equiv.columns:
         equiv_dict = dict(zip(equiv["cod_lre"], equiv["concepto_detalle"]))
 
-    # Parámetros mensuales (primera fila)
-    tope_afp = 0
-    tope_ces = 0
-    if not params.empty:
-        if "topeImp_pesos_afp" in params.columns:
-            tope_afp = params["topeImp_pesos_afp"].iloc[0]
-        if "topeCes_pesos" in params.columns:
-            tope_ces = params["topeCes_pesos"].iloc[0]
+    # Parámetros mensuales — filtrar por mes de proceso
+    tope_afp    = 0
+    tope_ces    = 0
+    tasa_sis    = 0
+    tope_salud  = 0
+    if not params.empty and "mes_Proc" in params.columns:
+        fila_params = params[params["mes_Proc"].astype(str).str.strip() == str(fecha_proceso).strip()]
+        if fila_params.empty:
+            fila_params = params
+        fp = fila_params.iloc[0]
+        tope_afp   = pd.to_numeric(fp.get("topeImp_pesos_afp", 0), errors="coerce") or 0
+        tope_ces   = pd.to_numeric(fp.get("topeCes_pesos",     0), errors="coerce") or 0
+        tasa_sis   = pd.to_numeric(fp.get("sis",               0), errors="coerce") or 0
+        tope_salud = pd.to_numeric(fp.get("topeSalud_pesos",   0), errors="coerce") or 0
 
     # Columnas de conceptos (las que están en equiv_dict)
     cols_concepto = [c for c in df.columns if c in equiv_dict]
@@ -595,7 +681,22 @@ def generar_filas_salida(df, fecha_proceso, refs):
         dias_licencia = row.get("Nro días de licencia médica en el mes(1116)", 0) or 0
         dias_vacaciones = row.get("Nro días de vacaciones en el mes(1117)", 0) or 0
         sueldo = row.get("Sueldo(2101)", 0) or 0
-        total_imponible = row.get("Total haberes imponibles y tributables(5210)", 0) or 0
+        total_imponible        = row.get("Total haberes imponibles y tributables(5210)", 0) or 0
+        total_haberes_afectos  = row.get("_total_haberes_afectos", 0) or 0
+        total_haberes_exentos  = row.get("_total_haberes_exentos", 0) or 0
+
+        def _n(v):
+            try: return float(str(v).replace(",", ".")) if pd.notna(v) and str(v).strip() != "" else 0.0
+            except: return 0.0
+        col_3143 = _n(row.get("Cotización obligatoria salud 7%(3143)", 0))
+        col_3144 = _n(row.get("Cotización voluntaria para salud(3144)", 0))
+        monto_isapre = col_3143 + col_3144
+        col_3141 = _n(row.get("Cotización obligatoria previsional (AFP o IPS)(3141)", 0))
+        col_3151 = _n(row.get("Cotización AFC - trabajador(3151)", 0))
+        col_3154 = _n(row.get("Cotización adicional trabajo pesado - trabajador(3154)", 0))
+        col_3156 = _n(row.get("Cotización APVi Mod B hasta UF50(3156)", 0))
+        salud_afecto = min(col_3143 + col_3144, tope_salud) if tope_salud > 0 else col_3143 + col_3144
+        rebaja_llss_impuesto = col_3141 + col_3151 + col_3154 + col_3156 + salud_afecto
         col_1152 = row.get("Org. administrador ley 16.744(1152)", "")
         col_3110 = row.get("Crédito social CCAF(3110)", 0) or 0
         rebaja_zona = row.get("Rebaja zona extrema DL 889 (3167)", 0) or 0
@@ -603,9 +704,19 @@ def generar_filas_salida(df, fecha_proceso, refs):
         monto_init = (sueldo / dias_trabajados * 30) if dias_trabajados > 0 else 0
 
         # Fila por cada concepto
+        CONCEPTOS_CON_CERO = {"impuesto", "cesEmpleado"}
         for col_csv in cols_concepto:
-            monto = row.get(col_csv, 0) or 0
+            _monto_raw = row.get(col_csv, 0)
+            try:
+                monto = float(str(_monto_raw).replace(",", ".")) if pd.notna(_monto_raw) and str(_monto_raw).strip() != "" else 0.0
+            except (ValueError, TypeError):
+                monto = 0.0
             id_concepto = equiv_dict.get(col_csv, "")
+
+            if monto == 0 and id_concepto not in CONCEPTOS_CON_CERO:
+                continue
+            if id_concepto == "isapre":
+                continue
 
             # Id de institución
             id_institucion = ""
@@ -626,12 +737,18 @@ def generar_filas_salida(df, fecha_proceso, refs):
 
             # Afecto
             afecto = ""
-            if id_concepto in GRUPOS_AFP_MUTUAL_AFECTO:
+            if id_concepto in {"afp", "isapre", "mutual", "sis", "trabajoPesaEmpl"}:
+                afecto = min(total_haberes_afectos, tope_afp) if tope_afp > 0 else total_haberes_afectos
+            elif id_concepto in {"cesEmpleado", "cesAporteCi", "cesAporteSol"}:
+                afecto = min(total_haberes_afectos, tope_ces) if tope_ces > 0 else total_haberes_afectos
+            elif id_concepto in GRUPOS_AFP_MUTUAL_AFECTO:
                 afecto = min(total_imponible, tope_afp) if tope_afp > 0 else total_imponible
             elif id_concepto in GRUPOS_CES_AFECTO:
                 afecto = min(total_imponible, tope_ces) if tope_ces > 0 else total_imponible
             elif id_concepto == "totalesEmpl":
-                afecto = total_imponible
+                afecto = total_haberes_afectos
+            elif id_concepto == "impuesto":
+                afecto = total_haberes_afectos - rebaja_llss_impuesto
 
             # Cotización de jubilación
             cot_jubilacion = 0
@@ -640,13 +757,13 @@ def generar_filas_salida(df, fecha_proceso, refs):
                 if not cot_afp.empty and "id_afp_hist" in cot_afp.columns:
                     r = cot_afp[cot_afp["id_afp_hist"] == key_afp]
                     if not r.empty:
-                        cot_jubilacion = r.iloc[0].get("cot_hist_afp", 0)
+                        cot_jubilacion = r.iloc[0].get("cot_hist_afp", 0) * 100
             elif id_concepto == "sis":
                 key_sis = f"{fecha_proceso}{id_institucion}"
                 if not cot_afp.empty and "id_afp_hist" in cot_afp.columns:
                     r = cot_afp[cot_afp["id_afp_hist"] == key_sis]
                     if not r.empty:
-                        cot_jubilacion = r.iloc[0].get("sis_hist", 0)
+                        cot_jubilacion = r.iloc[0].get("sis_hist", 0) * 100
             elif id_concepto == "cesEmpleado":
                 cot_jubilacion = 0.6
             elif id_concepto == "isapre":
@@ -661,9 +778,9 @@ def generar_filas_salida(df, fecha_proceso, refs):
                             if not e.empty:
                                 cot_jubilacion = e.iloc[0]["Cotización Mutual"]
             elif id_concepto == "licenciaDias":
-                cot_jubilacion = dias_licencia
+                cot_jubilacion = ""
             elif id_concepto == "totalesEmpl":
-                cot_jubilacion = min(total_imponible, tope_afp) if tope_afp > 0 else total_imponible
+                cot_jubilacion = min(total_haberes_afectos, tope_afp) if tope_afp > 0 else total_haberes_afectos
 
             filas.append({
                 "Fecha de proceso": fecha_proceso,
@@ -675,14 +792,40 @@ def generar_filas_salida(df, fecha_proceso, refs):
                 "Id de institución": id_institucion,
                 "Cotización de jubilación": cot_jubilacion,
                 "Días de licencias": dias_licencia,
-                "Días trabajados": dias_vacaciones,
-                "Fecha de aplicación": "x",
+                "Días trabajados": dias_trabajados,
+                "Fecha de aplicación": fecha_proceso,
                 "Empresa": empresa_salida,
-                "Total de rebajas por L": rebaja_zona,
+                "Total de rebajas por LLSS": rebaja_llss_impuesto if id_concepto == "impuesto" else 0,
+                "Rentas no gravadas": total_haberes_exentos if id_concepto == "impuesto" else 0,
+                "Rebaja por zona extrema": rebaja_zona,
                 "Jornada": "C",
-                "Fase": 1,
                 "Días de vacaciones": dias_vacaciones,
                 "Monto Init": monto_init,
+                "Fase": 1,
+            })
+
+        # Fila isapre combinada
+        if monto_isapre != 0:
+            filas.append({
+                "Fecha de proceso": fecha_proceso,
+                "Id empleado": rut,
+                "Número de contrato": 1,
+                "Id del concepto": "isapre",
+                "Monto del concepto": monto_isapre,
+                "Afecto": min(total_haberes_afectos, tope_afp) if tope_afp > 0 else total_haberes_afectos,
+                "Id de institución": isapre_empleado,
+                "Cotización de jubilación": monto_isapre,
+                "Días de licencias": dias_licencia,
+                "Días trabajados": dias_trabajados,
+                "Fecha de aplicación": fecha_proceso,
+                "Empresa": empresa_salida,
+                "Total de rebajas por LLSS": 0,
+                "Rentas no gravadas": 0,
+                "Rebaja por zona extrema": rebaja_zona,
+                "Jornada": "C",
+                "Días de vacaciones": dias_vacaciones,
+                "Monto Init": monto_init,
+                "Fase": 1,
             })
 
         # Fila adicional licenciaDias si aplica
@@ -695,16 +838,18 @@ def generar_filas_salida(df, fecha_proceso, refs):
                 "Monto del concepto": dias_licencia,
                 "Afecto": "",
                 "Id de institución": "",
-                "Cotización de jubilación": dias_licencia,
+                "Cotización de jubilación": "",
                 "Días de licencias": dias_licencia,
-                "Días trabajados": dias_vacaciones,
-                "Fecha de aplicación": "x",
+                "Días trabajados": dias_trabajados,
+                "Fecha de aplicación": fecha_proceso,
                 "Empresa": empresa_salida,
-                "Total de rebajas por L": rebaja_zona,
+                "Total de rebajas por LLSS": 0,
+                "Rentas no gravadas": 0,
+                "Rebaja por zona extrema": rebaja_zona,
                 "Jornada": "C",
-                "Fase": 1,
                 "Días de vacaciones": dias_vacaciones,
                 "Monto Init": monto_init,
+                "Fase": 1,
             })
 
     return pd.DataFrame(filas)
@@ -812,15 +957,36 @@ with nav_migracion:
             "Sube el archivo listado_empleados.xlsx correspondiente al período a procesar",
             type=["xlsx"],
             accept_multiple_files=False,
-            help="Este archivo cambia en cada proceso. Debe contener: Rut, Empresa, AFP, Isapre"
+            help="Requerido solo para archivos LRE estándar. Debe contener: Rut, Empresa, AFP, Isapre. "
+                 "No es necesario para archivos exportados directamente desde Rex+."
         )
         if archivo_empleados:
             st.markdown(f'<div class="alert-success">✅ Listado de empleados cargado: <b>{archivo_empleados.name}</b></div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="alert-warning">⚠️ Debes subir el listado de empleados del período para ejecutar el proceso.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="alert-warning">⚠️ Requerido solo para archivos LRE estándar. Los archivos exportados desde Rex+ no lo necesitan.</div>', unsafe_allow_html=True)
+
+    col_up3, _ = st.columns([1, 1])
+    with col_up3:
+        st.markdown("#### 📅 Parámetros mensuales")
+        archivo_params = st.file_uploader(
+            "Sube el archivo parametrosMensuales.xlsx",
+            type=["xlsx"],
+            accept_multiple_files=False,
+            key="up_params",
+            help="Requerido siempre. Contiene los parámetros del mes a procesar."
+        )
+        if archivo_params:
+            st.markdown(f'<div class="alert-success">✅ Parámetros cargados: <b>{archivo_params.name}</b></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="alert-error">❌ Debes subir el archivo parametrosMensuales.xlsx para continuar.</div>', unsafe_allow_html=True)
 
     if archivos:
         st.markdown(f'<div class="alert-success">✅ {len(archivos)} archivo(s) cargado(s): {", ".join([f.name for f in archivos])}</div>', unsafe_allow_html=True)
+
+        archivos_key = tuple(f.name for f in archivos)
+        if st.session_state.get("_archivos_key") != archivos_key:
+            st.session_state["_validacion_ok"] = False
+            st.session_state["_archivos_key"] = archivos_key
 
         valido, prefijos = validar_archivos(archivos)
         if not valido:
@@ -832,114 +998,166 @@ with nav_migracion:
             </div>""", unsafe_allow_html=True)
             st.stop()
 
-        if not archivo_empleados:
-            st.info("Sube el listado de empleados del período para habilitar el proceso.")
-        else:
-            if st.button("▶ Ejecutar validaciones"):
-                todos_errores = []
-                dfs = []
+        if st.button("▶ Ejecutar validaciones"):
+            todos_errores = []
+            dfs = []
+            df_empl_acum = pd.DataFrame()
 
-                # Leer listado_empleados (encabezado real en la fila 2; fila 1 = título)
+            # ── Detectar formato leyendo el primer archivo ──
+            primer_archivo = archivos[0]
+            primer_archivo.seek(0)
+            try:
+                df_muestra = pd.read_csv(primer_archivo, encoding="utf-8-sig", sep=None, engine="python", nrows=1)
+            except Exception:
+                primer_archivo.seek(0)
+                df_muestra = pd.read_csv(primer_archivo, encoding="latin-1", sep=None, engine="python", nrows=1)
+            primer_archivo.seek(0)
+            es_rexplus = detectar_formato_rexplus(df_muestra)
+
+            if not archivo_params:
+                st.markdown('<div class="alert-error">❌ Debes subir el archivo parametrosMensuales.xlsx para continuar.</div>', unsafe_allow_html=True)
+                st.stop()
+            try:
+                df_params = pd.read_excel(archivo_params, sheet_name="Hoja2", dtype={"mes_Proc": str})
+            except Exception:
+                archivo_params.seek(0)
+                df_params = pd.read_excel(archivo_params, sheet_name=0, dtype={"mes_Proc": str})
+            df_params["mes_Proc"] = df_params["mes_Proc"].astype(str).str.strip()
+            refs["parametros"] = df_params
+
+            if es_rexplus:
+                st.markdown('<div class="alert-success">✅ Formato detectado: <b>Rex+</b>. Los datos de AFP, Isapre y Mutual se obtienen del propio archivo.</div>', unsafe_allow_html=True)
+            else:
+                # Formato LRE estándar: requiere listado_empleados.xlsx
+                if not archivo_empleados:
+                    st.markdown('<div class="alert-error">❌ Debes subir el listado de empleados del período para archivos en formato LRE estándar.</div>', unsafe_allow_html=True)
+                    st.stop()
                 df_empleados_previred = pd.read_excel(archivo_empleados, header=1)
                 df_empleados_previred.columns = [str(c).strip() for c in df_empleados_previred.columns]
-
-                # ── Validar estructura de listado_empleados (independiente del nombre del archivo) ──
                 ok_emp, faltantes_emp = validar_estructura(df_empleados_previred, ["Rut", "Empresa", "AFP", "Isapre"])
                 if not ok_emp:
                     st.markdown(f'<div class="alert-error">❌ <b>{archivo_empleados.name}</b>: Archivo no tiene la estructura esperada, corrija antes de continuar.</div>', unsafe_allow_html=True)
                     st.stop()
-
                 refs["listado_empleados"] = df_empleados_previred
 
-                with st.spinner("Procesando archivos..."):
-                    for archivo in archivos:
-                        for enc in ("utf-8", "latin-1", "utf-8-sig", "cp1252"):
-                            try:
-                                archivo.seek(0)
-                                df = pd.read_csv(archivo, encoding=enc, sep=None, engine="python")
-                                df["_fila_csv"] = range(2, len(df) + 2)
-                                break
-                            except (UnicodeDecodeError, Exception):
-                                continue
-                        else:
-                            st.error(f"❌ No se pudo leer {archivo.name}. Verifica que sea un CSV válido.")
-                            st.stop()
+            with st.spinner("Procesando archivos..."):
+                for archivo in archivos:
+                    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+                        try:
+                            archivo.seek(0)
+                            df = pd.read_csv(archivo, encoding=enc, sep=None, engine="python")
+                            df["_fila_csv"] = range(2, len(df) + 2)
+                            break
+                        except (UnicodeDecodeError, Exception):
+                            continue
+                    else:
+                        st.error(f"❌ No se pudo leer {archivo.name}. Verifica que sea un CSV válido.")
+                        st.stop()
 
-                        # ── Validar estructura del CSV (independiente del nombre del archivo) ──
-                        if df.empty:
-                            st.markdown(f'<div class="alert-error">❌ <b>{archivo.name}</b>: Archivo no tiene la estructura esperada, corrija antes de continuar.</div>', unsafe_allow_html=True)
-                            st.stop()
-                        if "Rut trabajador (1101)" not in df.columns:
-                            st.markdown(f'<div class="alert-error">❌ <b>{archivo.name}</b>: Archivo no tiene la estructura esperada, corrija antes de continuar.</div>', unsafe_allow_html=True)
-                            st.stop()
+                    # ── Normalizar si es formato Rex+ ──
+                    if es_rexplus:
+                        df, df_empl = normalizar_rexplus(df)
+                        df_empl_acum = pd.concat([df_empl_acum, df_empl], ignore_index=True).drop_duplicates(subset=["Rut"])
+                        refs["listado_empleados"] = df_empl_acum
 
-                        df = calcular_totales(df)
-                        errores = validar_cuadraturas(df, archivo.name)
-                        todos_errores.extend(errores)
+                    # ── Validar estructura del CSV ──
+                    if df.empty:
+                        st.markdown(f'<div class="alert-error">❌ <b>{archivo.name}</b>: Archivo no tiene la estructura esperada, corrija antes de continuar.</div>', unsafe_allow_html=True)
+                        st.stop()
+                    if "Rut trabajador (1101)" not in df.columns:
+                        st.markdown(f'<div class="alert-error">❌ <b>{archivo.name}</b>: Archivo no tiene la estructura esperada, corrija antes de continuar.</div>', unsafe_allow_html=True)
+                        st.stop()
+
+                    df = calcular_totales(df)
+                    errores = validar_cuadraturas(df, archivo.name)
+                    todos_errores.extend(errores)
+
+                    # Obtener fecha de proceso
+                    if es_rexplus and "Fecha de proceso" in df.columns:
+                        fecha_proceso = str(df["Fecha de proceso"].iloc[0])[:7].strip().strip("'\"")
+                    else:
                         fecha_proceso = extraer_fecha_proceso(archivo.name)
-                        df["_fecha_proceso"] = fecha_proceso
-                        dfs.append(df)
 
-                st.markdown('<hr class="rex-divider">', unsafe_allow_html=True)
-                st.markdown("### 🔍 Resultado de validaciones")
+                    df["_fecha_proceso"] = fecha_proceso
+                    dfs.append(df)
 
-                if todos_errores:
-                    st.markdown(f"""
-                    <div class="alert-error">
-                        ❌ <b>No se puede generar el archivo de salida.</b><br>
-                        Se encontraron <b>{len(todos_errores)} error(es)</b> de validación en los registros procesados.
-                    </div>""", unsafe_allow_html=True)
+            st.session_state["_validacion_ok"]  = True
+            st.session_state["_todos_errores"]  = todos_errores
+            st.session_state["_dfs"]            = dfs
+            st.session_state["_refs_empl"]      = refs.get("listado_empleados", pd.DataFrame())
+            st.session_state["_refs_params"]    = refs.get("parametros", pd.DataFrame())
+            st.session_state["_nombre_empresa"] = archivos[0].name[:10]
 
-                    with st.expander("📋 Ver log de errores detallado"):
-                        df_errores = pd.DataFrame(todos_errores)
-                        st.dataframe(df_errores, use_container_width=True, hide_index=True)
-                        csv_log = df_errores.to_csv(index=False).encode("utf-8")
-                        st.download_button(
-                            label="⬇️ Descargar log de errores (.csv)",
-                            data=csv_log,
-                            file_name=f"log_errores_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv"
-                        )
-                else:
-                    st.markdown("""
-                    <div class="alert-success">
-                        ✅ <b>Todas las validaciones se cumplieron correctamente.</b><br>
-                        Los registros de todos los archivos cuadran sin diferencias.
-                    </div>""", unsafe_allow_html=True)
+        if st.session_state.get("_validacion_ok"):
+            _todos_errores  = st.session_state["_todos_errores"]
+            _dfs            = st.session_state["_dfs"]
+            _refs_empl      = st.session_state["_refs_empl"]
+            _nombre_empresa = st.session_state["_nombre_empresa"]
 
-                    st.markdown("#### ¿Desea generar el archivo de salida?")
-                    col_a, col_b, col_c, _ = st.columns([1, 1, 1, 4])
-                    with col_a:
-                        aceptar = st.button("✅ Aceptar")
-                    with col_b:
-                        cancelar = st.button("✖ Cancelar")
-                    with col_c:
-                        salir = st.button("🚪 Salir")
+            st.markdown('<hr class="rex-divider">', unsafe_allow_html=True)
+            st.markdown("### 🔍 Resultado de validaciones")
 
-                    if salir:
-                        st.markdown('<div class="alert-warning">La sesión ha sido cerrada. Puedes cerrar esta ventana.</div>', unsafe_allow_html=True)
-                        st.stop()
-                    if cancelar:
-                        st.markdown('<div class="alert-warning">Operación cancelada. Puedes subir nuevos archivos.</div>', unsafe_allow_html=True)
-                        st.stop()
-                    if aceptar:
-                        with st.spinner("Generando archivo de salida..."):
-                            df_combined = pd.concat(dfs, ignore_index=True)
-                            filas_salida = []
-                            for _, grupo in df_combined.groupby("_fecha_proceso"):
-                                fp = grupo["_fecha_proceso"].iloc[0]
-                                df_out = generar_filas_salida(grupo, fp, refs)
-                                filas_salida.append(df_out)
-                            df_final = pd.concat(filas_salida, ignore_index=True) if filas_salida else pd.DataFrame()
-                            excel_bytes = generar_excel(df_final)
-                        st.markdown('<div class="alert-success">✅ Archivo generado exitosamente.</div>', unsafe_allow_html=True)
-                        nombre_empresa = archivos[0].name[:10]
-                        st.download_button(
-                            label="⬇️ Descargar archivo de salida (.xlsx)",
-                            data=excel_bytes,
-                            file_name=f"migracion_{nombre_empresa}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+            if _todos_errores:
+                st.markdown(f"""
+                <div class="alert-error">
+                    ❌ <b>No se puede generar el archivo de salida.</b><br>
+                    Se encontraron <b>{len(_todos_errores)} error(es)</b> de validación en los registros procesados.
+                </div>""", unsafe_allow_html=True)
+
+                with st.expander("📋 Ver log de errores detallado"):
+                    df_errores = pd.DataFrame(_todos_errores)
+                    st.dataframe(df_errores, use_container_width=True, hide_index=True)
+                    csv_log = df_errores.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="⬇️ Descargar log de errores (.csv)",
+                        data=csv_log,
+                        file_name=f"log_errores_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            else:
+                st.markdown("""
+                <div class="alert-success">
+                    ✅ <b>Todas las validaciones se cumplieron correctamente.</b><br>
+                    Los registros de todos los archivos cuadran sin diferencias.
+                </div>""", unsafe_allow_html=True)
+
+                st.markdown("#### ¿Desea generar el archivo de salida?")
+                col_a, col_b, col_c, _ = st.columns([1, 1, 1, 4])
+                with col_a:
+                    aceptar = st.button("✅ Aceptar")
+                with col_b:
+                    cancelar = st.button("✖ Cancelar")
+                with col_c:
+                    salir = st.button("🚪 Salir")
+
+                if salir:
+                    st.session_state["_validacion_ok"] = False
+                    st.markdown('<div class="alert-warning">La sesión ha sido cerrada. Puedes cerrar esta ventana.</div>', unsafe_allow_html=True)
+                    st.stop()
+                if cancelar:
+                    st.session_state["_validacion_ok"] = False
+                    st.markdown('<div class="alert-warning">Operación cancelada. Puedes subir nuevos archivos.</div>', unsafe_allow_html=True)
+                    st.stop()
+                if aceptar:
+                    refs["listado_empleados"] = _refs_empl
+                    refs["parametros"] = st.session_state.get("_refs_params", refs.get("parametros", pd.DataFrame()))
+                    with st.spinner("Generando archivo de salida..."):
+                        df_combined = pd.concat(_dfs, ignore_index=True)
+                        filas_salida = []
+                        for _, grupo in df_combined.groupby("_fecha_proceso"):
+                            fp = grupo["_fecha_proceso"].iloc[0]
+                            df_out = generar_filas_salida(grupo, fp, refs)
+                            filas_salida.append(df_out)
+                        df_final = pd.concat(filas_salida, ignore_index=True) if filas_salida else pd.DataFrame()
+                        excel_bytes = generar_excel(df_final)
+                    st.session_state["_validacion_ok"] = False
+                    st.markdown('<div class="alert-success">✅ Archivo generado exitosamente.</div>', unsafe_allow_html=True)
+                    st.download_button(
+                        label="⬇️ Descargar archivo de salida (.xlsx)",
+                        data=excel_bytes,
+                        file_name=f"migracion_{_nombre_empresa}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
 with nav_dt:
     render_modulo_dt(refs)
