@@ -476,7 +476,7 @@ def safe_sum(df, cols):
     cols_presentes = [c for c in cols if c in df.columns]
     if not cols_presentes:
         return pd.Series(0, index=df.index)
-    return df[cols_presentes].fillna(0).sum(axis=1)
+    return df[cols_presentes].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
 
 def get_col(df, col, default=0):
     """Obtiene una columna del df o retorna default si no existe."""
@@ -628,6 +628,17 @@ def generar_filas_salida(df, fecha_proceso, refs):
     empresas = refs.get("listado_empresas", pd.DataFrame())
     mutuales = refs.get("inst_mutuales", pd.DataFrame())
     cajas = refs.get("inst_cajas", pd.DataFrame())
+    salud_inst = refs.get("inst_salud", pd.DataFrame())
+    afp_inst   = refs.get("inst_afp", pd.DataFrame())
+
+    def _norm(s):
+        return str(s).lower().replace(" ","").replace("-","").replace("_","") if s else ""
+
+    def _lookup_id(df, id_col, value):
+        if df.empty or id_col not in df.columns or not value: return value
+        match = df[df[id_col].apply(_norm) == _norm(value)]
+        return match.iloc[0][id_col] if not match.empty else value
+
     cot_afp = refs.get("cot_afp_hist", pd.DataFrame())
     params = refs.get("parametros", pd.DataFrame())
 
@@ -658,8 +669,10 @@ def generar_filas_salida(df, fecha_proceso, refs):
         rut = row.get("Rut trabajador (1101)", "")
 
         # Lookup empresa
-        empresa_salida = ""
-        if not empleados.empty and "Rut" in empleados.columns:
+        _emp_raw = row.get("Id de empresa", "")
+        _emp_num = pd.to_numeric(_emp_raw, errors="coerce")
+        empresa_salida = str(int(_emp_num)) if not pd.isna(_emp_num) else str(_emp_raw or "").strip()
+        if not empresa_salida and not empleados.empty and "Rut" in empleados.columns:
             emp_row = empleados[empleados["Rut"] == rut]
             if not emp_row.empty:
                 nombre_empresa = emp_row.iloc[0].get("Empresa", "")
@@ -677,8 +690,13 @@ def generar_filas_salida(df, fecha_proceso, refs):
                 afp_empleado = emp_row.iloc[0].get("AFP", "")
                 isapre_empleado = emp_row.iloc[0].get("Isapre", "")
 
-        dias_trabajados = row.get("Nro días trabajados en el mes(1115)", 0) or 0
-        dias_licencia = row.get("Nro días de licencia médica en el mes(1116)", 0) or 0
+        dias_licencia = row.get("Nro días de licencia médica en el mes(1116)",
+                         row.get("Nro días de licencia médica", None))
+        _lic = pd.to_numeric(dias_licencia, errors="coerce"); dias_licencia = 0 if pd.isna(_lic) else int(_lic)
+        _dias_trab_raw = row.get("Nro días trabajados en el mes(1115)",
+                          row.get("Nro días trabajados", 0))
+        _trab = pd.to_numeric(_dias_trab_raw, errors="coerce"); _dias_trab_raw = 0 if pd.isna(_trab) else int(_trab)
+        dias_trabajados = max(0, _dias_trab_raw - dias_licencia)
         dias_vacaciones = row.get("Nro días de vacaciones en el mes(1117)", 0) or 0
         sueldo = row.get("Sueldo(2101)", 0) or 0
         total_imponible        = row.get("Total haberes imponibles y tributables(5210)", 0) or 0
@@ -721,14 +739,16 @@ def generar_filas_salida(df, fecha_proceso, refs):
             # Id de institución
             id_institucion = ""
             if id_concepto in GRUPOS_AFP:
-                id_institucion = afp_empleado
+                id_institucion = _lookup_id(afp_inst, "id_afp", afp_empleado)
             elif id_concepto in GRUPOS_ISAPRE:
-                id_institucion = isapre_empleado
+                id_institucion = _lookup_id(salud_inst, "id_inst", isapre_empleado)
             elif id_concepto in GRUPOS_MUTUAL:
-                if not mutuales.empty and "cod_lre" in mutuales.columns and "id_mutual" in mutuales.columns:
+                if not mutuales.empty and "id_mutual" in mutuales.columns:
                     m = mutuales[mutuales["cod_lre"] == col_1152]
-                    if not m.empty:
-                        id_institucion = m.iloc[0]["id_mutual"]
+                    if m.empty: m = mutuales[mutuales["id_mutual"].apply(_norm) == _norm(col_1152)]
+                    if m.empty and "nombre_mutual" in mutuales.columns:
+                        m = mutuales[mutuales["nombre_mutual"].apply(_norm) == _norm(col_1152)]
+                    if not m.empty: id_institucion = m.iloc[0]["id_mutual"]
             elif id_concepto in GRUPOS_CCAF and col_3110 != 0:
                 if not cajas.empty:
                     c = cajas[cajas.iloc[:, 0] == col_3110]
@@ -813,7 +833,7 @@ def generar_filas_salida(df, fecha_proceso, refs):
                 "Id del concepto": "isapre",
                 "Monto del concepto": monto_isapre,
                 "Afecto": min(total_haberes_afectos, tope_afp) if tope_afp > 0 else total_haberes_afectos,
-                "Id de institución": isapre_empleado,
+                "Id de institución": _lookup_id(salud_inst, "id_inst", isapre_empleado),
                 "Cotización de jubilación": monto_isapre,
                 "Días de licencias": dias_licencia,
                 "Días trabajados": dias_trabajados,
@@ -889,6 +909,44 @@ def generar_excel(df_salida):
     return output.getvalue()
 
 # ─────────────────────────────────────────────
+def generar_log_excel(dfs):
+    df = pd.concat(dfs, ignore_index=True)
+    cols_int = [c for c in df.columns if c.startswith('_') and c not in
+        ('_total_haberes_afectos','_total_haberes_exentos','_total_descuentos_legales','_total_otros_descuentos')]
+    df = df.drop(columns=cols_int, errors='ignore')
+    df = df.rename(columns={'_total_haberes_afectos':'Total haberes afectos',
+        '_total_haberes_exentos':'Total haberes exentos',
+        '_total_descuentos_legales':'Total descuentos legales',
+        '_total_otros_descuentos':'Total otros descuentos'})
+    df['Suma de haberes']   = df['Total haberes afectos'] + df['Total haberes exentos']
+    df['Total descuentos']  = df['Total descuentos legales'] + df['Total otros descuentos']
+    df['Liquido calculado'] = df['Suma de haberes'] - df['Total descuentos']
+    col_liq = next((c for c in df.columns if '5501' in c), None)
+    df['Diferencia'] = (df['Liquido calculado'] - pd.to_numeric(df[col_liq], errors='coerce').fillna(0)) if col_liq else 0
+    out_buf = io.BytesIO()
+    wb2 = Workbook(); ws2 = wb2.active; ws2.title = 'Log validacion'
+    hf=PatternFill('solid',fgColor='1A2744'); hfont=Font(bold=True,color='FFFFFF',size=10)
+    yf=PatternFill('solid',fgColor='FFFF00'); ef=PatternFill('solid',fgColor='EAF0F8')
+    wf=PatternFill('solid',fgColor='FFFFFF')
+    brd=Border(bottom=Side(style='thin',color='E8EDF5'),right=Side(style='thin',color='E8EDF5'))
+    for ci,col in enumerate(df.columns,1):
+        cell=ws2.cell(row=1,column=ci,value=col); cell.fill=hf; cell.font=hfont
+        cell.alignment=Alignment(horizontal='center',vertical='center')
+        ws2.column_dimensions[cell.column_letter].width=max(len(str(col))+4,14)
+    cols_list = list(df.columns)
+    cols_amarillas = {"Total haberes afectos","Total haberes exentos","Total descuentos legales",
+        "Total otros descuentos","Suma de haberes","Total descuentos","Liquido calculado","Diferencia"}
+    idx_amarillas = {i+1 for i,c in enumerate(cols_list) if c in cols_amarillas}
+    for ri,row in enumerate(df.itertuples(index=False),2):
+        diff=row[-1]; row_diff=(isinstance(diff,(int,float)) and abs(diff)>1)
+        base_fill = ef if ri%2==0 else wf
+        for ci,val in enumerate(row,1):
+            cell=ws2.cell(row=ri,column=ci,value=val)
+            cell.fill = yf if (ci in idx_amarillas or row_diff) else base_fill
+            cell.border=brd; cell.alignment=Alignment(vertical='center')
+    ws2.freeze_panes='A2'; wb2.save(out_buf)
+    return out_buf.getvalue()
+
 # INTERFAZ PRINCIPAL
 # ─────────────────────────────────────────────
 
@@ -1006,6 +1064,7 @@ with nav_migracion:
             # ── Detectar formato leyendo el primer archivo ──
             primer_archivo = archivos[0]
             primer_archivo.seek(0)
+            _ext0 = primer_archivo.name.lower().split(".")[-1]
             try:
                 df_muestra = pd.read_csv(primer_archivo, encoding="utf-8-sig", sep=None, engine="python", nrows=1)
             except Exception:
@@ -1074,11 +1133,11 @@ with nav_migracion:
 
                     # Obtener fecha de proceso
                     if es_rexplus and "Fecha de proceso" in df.columns:
-                        fecha_proceso = str(df["Fecha de proceso"].iloc[0])[:7].strip().strip("'\"")
+                        df["_fecha_proceso"] = df["Fecha de proceso"].astype(str).str[:7].str.strip()
                     else:
                         fecha_proceso = extraer_fecha_proceso(archivo.name)
 
-                    df["_fecha_proceso"] = fecha_proceso
+
                     dfs.append(df)
 
             st.session_state["_validacion_ok"]  = True
@@ -1087,12 +1146,15 @@ with nav_migracion:
             st.session_state["_refs_empl"]      = refs.get("listado_empleados", pd.DataFrame())
             st.session_state["_refs_params"]    = refs.get("parametros", pd.DataFrame())
             st.session_state["_nombre_empresa"] = archivos[0].name[:10]
+            import os as _os
+            st.session_state["_nombre_archivo"] = _os.path.splitext(archivos[0].name)[0]
 
         if st.session_state.get("_validacion_ok"):
             _todos_errores  = st.session_state["_todos_errores"]
             _dfs            = st.session_state["_dfs"]
             _refs_empl      = st.session_state["_refs_empl"]
             _nombre_empresa = st.session_state["_nombre_empresa"]
+            _nombre_archivo = st.session_state.get("_nombre_archivo", _nombre_empresa)
 
             st.markdown('<hr class="rex-divider">', unsafe_allow_html=True)
             st.markdown("### 🔍 Resultado de validaciones")
@@ -1107,12 +1169,12 @@ with nav_migracion:
                 with st.expander("📋 Ver log de errores detallado"):
                     df_errores = pd.DataFrame(_todos_errores)
                     st.dataframe(df_errores, use_container_width=True, hide_index=True)
-                    csv_log = df_errores.to_csv(index=False).encode("utf-8")
+                    xlsx_log = generar_log_excel(_dfs)
                     st.download_button(
-                        label="⬇️ Descargar log de errores (.csv)",
-                        data=csv_log,
-                        file_name=f"log_errores_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
+                        label="⬇️ Descargar log de errores (.xlsx)",
+                        data=xlsx_log,
+                        file_name=f"Log_{_nombre_archivo}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
             else:
                 st.markdown("""
