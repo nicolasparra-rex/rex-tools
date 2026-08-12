@@ -31,13 +31,18 @@ import streamlit as st
 import openpyxl
  
 # ----------------------------------------------------------------------------- #
-#  Branding rex-tools (best-effort; si no existe, seguimos sin estilos)
+#  Config de página + branding rex-tools (igual que las demás páginas)
 # ----------------------------------------------------------------------------- #
+st.set_page_config(page_title="Migración BNOVUS | Rex+ Tools",
+                   page_icon="👥", layout="wide")
 try:
-    from lib.branding import aplicar_estilos  # type: ignore
-    aplicar_estilos()
-except Exception:
-    pass
+    from lib.branding import aplicar_branding, aplicar_footer, hero
+    BRANDING = True
+except ImportError:
+    BRANDING = False
+ 
+if BRANDING:
+    aplicar_branding(titulo_pagina="Migración BNOVUS", badge="BETA")
  
 TEMPLATE_PATH = os.path.join("data", "plantilla_bnovus.xlsx")
  
@@ -83,11 +88,12 @@ def _to_date(v):
 # ----------------------------------------------------------------------------- #
 SEXO_MAP = {"m": "MASCULINO", "f": "FEMENINO"}
  
+# Formato según archivo BNOVUS aceptado: sin "(a)", en título.
 ESTCIVIL_MAP = {
-    "s": "Soltero(a)",
-    "c": "Casado(a)",
-    "d": "Divorciado(a)",
-    "v": "Viudo(a)",
+    "s": "Soltero",
+    "c": "Casado",
+    "d": "Divorciado",
+    "v": "Viudo",
     "u": "Conviviente Civil",   # 'U' = unión/conviviente civil (confirmar con negocio)
 }
  
@@ -123,11 +129,12 @@ FORMAPAGO_MAP = {
     "sindefinir": "",
 }
  
+# Formato según archivo BNOVUS aceptado: en MAYÚSCULAS.
 TIPOCONTRATO_MAP = {
-    "i": "Indefinido",
-    "f": "A Plazo Fijo",
-    "o": "Por Obra o Faena",
-    "h": "Honorarios",
+    "i": "INDEFINIDO",
+    "f": "A PLAZO FIJO",
+    "o": "POR OBRA O FAENA",
+    "h": "HONORARIOS",
 }
  
 # Jubilado? -> Prevision Tipo Trabajador (catálogo TipoTrabAFP)
@@ -178,10 +185,21 @@ BANCO_MAP = {
     "corpbanca": "CORPBANCA",
 }
  
+# País (Rex) -> Nacionalidad (título), según archivo BNOVUS aceptado.
 NACIONALIDAD_MAP = {
-    "chile": "CHILENA",
-    "chilena": "CHILENA",
+    "chile": "Chilena", "chilena": "Chilena",
+    "peru": "Peruana", "peruana": "Peruana",
+    "bolivia": "Boliviana", "boliviana": "Boliviana",
+    "venezuela": "Venezolana", "venezolana": "Venezolana",
+    "colombia": "Colombiana", "colombiana": "Colombiana",
+    "argentina": "Argentina",
+    "ecuador": "Ecuatoriana", "ecuatoriana": "Ecuatoriana",
+    "haiti": "Haitiana", "haitiana": "Haitiana",
+    "brasil": "Brasileña",
 }
+ 
+# Fecha término placeholder para contratos indefinidos (archivo aceptado usa 31-12-2030).
+FEC_TERMINO_INDEFINIDO = datetime(2030, 12, 31)
  
 # Índice de columnas BNOVUS por encabezado exacto de la fila 1 de la plantilla
 BNOVUS_HEADERS = [
@@ -313,7 +331,7 @@ def transformar(df, rut_empresa, incluir_todos, defaults, avisos):
         prev_tipo = PREVTIPO_MAP.get(prev_src, "Activo")
  
         nacion = NACIONALIDAD_MAP.get(_norm(g(row, "País")),
-                                      _clean(g(row, "País")).upper() or "CHILENA")
+                                      _clean(g(row, "País")).title() or "Chilena")
  
         # --- salud: modalidad de pactado ---
         moneda_isa = _norm(g(row, "Moneda Isapre"))
@@ -331,11 +349,12 @@ def transformar(df, rut_empresa, incluir_todos, defaults, avisos):
         # --- fechas ---
         fec_ini_contr = _to_date(g(row, "Fecha Inicio contrato"))
         fec_term_contr = _to_date(g(row, "Fecha término contrato"))
-        # placeholder de "indefinido" (año >= 2999) -> término en blanco
+        # placeholder de "indefinido" (año >= 2999 en Rex) -> ignorar
         if fec_term_contr is not None and fec_term_contr.year >= 2999:
             fec_term_contr = None
-        if tc == "Indefinido":
-            fec_term_bn = None
+        if tc == "INDEFINIDO":
+            # archivo BNOVUS aceptado usa 31-12-2030 como término de indefinidos
+            fec_term_bn = FEC_TERMINO_INDEFINIDO
         else:
             fec_term_bn = fec_term_contr
         fec_venc_vac = _to_date(g(row, "Fecha inicio vacaciones")) or fec_ini_contr
@@ -345,8 +364,10 @@ def transformar(df, rut_empresa, incluir_todos, defaults, avisos):
         afecto_ces = g(row, "Afecto Seguro Cesantéa", "Afecto Seguro Cesantia")
         habilita_ces = "S" if bool(afecto_ces) else "N"
  
-        # --- código interno ---
-        cod_int = _clean(g(row, "Código Interno")) or rut
+        # --- código interno: la columna "Código Interno" de Rex trae basura
+        #     (valores como 'SI', 'CONTRATO 1', códigos de centro de costo),
+        #     y el archivo BNOVUS aceptado la deja vacía -> siempre en blanco.
+        cod_int = ""
  
         # --- sindicato ---
         sind_src = _norm(g(row, "Sindicato"))
@@ -420,7 +441,7 @@ def transformar(df, rut_empresa, incluir_todos, defaults, avisos):
         s("Fecha Ingreso Seguro Cesantia", fec_cesantia)
         s("Afp Seguro Cesantia", afp)
         s("Numero Contrato", 1)
-        s("Rol", "Empleados")
+        s("Rol", "empleados")
         s("Grupo", "Todos los empleados")
  
         filas.append(fila)
@@ -463,9 +484,14 @@ def construir_workbook(filas, template_bytes):
 #  UI
 # ----------------------------------------------------------------------------- #
 def main():
-    st.title("Migración de empleados · Rex → BNOVUS")
-    st.caption("Convierte el Listado de Empleados de Rex al archivo de carga de "
-               "trabajadores de BNOVUS.")
+    if BRANDING:
+        hero("👥 Migración de empleados · Rex → BNOVUS",
+             "Convierte el Listado de Empleados de Rex al archivo de carga de "
+             "trabajadores de BNOVUS.")
+    else:
+        st.title("Migración de empleados · Rex → BNOVUS")
+        st.caption("Convierte el Listado de Empleados de Rex al archivo de carga de "
+                   "trabajadores de BNOVUS.")
  
     with st.sidebar:
         st.header("Parámetros")
@@ -549,6 +575,9 @@ def main():
                 st.write(f"**{k}**: {', '.join(sorted(map(str, v)))}")
         else:
             st.info("Todos los valores codificados se mapearon correctamente.")
+ 
+    if BRANDING:
+        aplicar_footer()
  
  
 if __name__ == "__main__" or True:
