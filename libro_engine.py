@@ -142,6 +142,28 @@ def resolver_inst(valor, homolog, clasifs=None):
         if any(t in n for t in toks): return h["id"]
     return None
 
+import re as _re
+MESES_ES = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,"julio":7,
+            "agosto":8,"septiembre":9,"setiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
+def detectar_periodo(df, filename=""):
+    """Detecta AAAA-MM desde el nombre del archivo o el contenido de la hoja. '' si no puede."""
+    def buscar(txt):
+        t = norm(txt)
+        m = _re.search(r"(20\d\d)[-_ ]?(0[1-9]|1[0-2])(?!\d)", t)
+        if m: return f"{m.group(1)}-{m.group(2)}"
+        for name, mm in MESES_ES.items():
+            m = _re.search(name + r"\s+de\s+(20\d\d)", t) or _re.search(name + r"\s+(20\d\d)", t) or _re.search(r"(20\d\d)\s+" + name, t)
+            if m: return f"{m.group(1)}-{mm:02d}"
+        return ""
+    p = buscar(filename or "")
+    if p: return p
+    for r in range(min(12, len(df))):
+        for x in df.iloc[r].values:
+            if x is None: continue
+            p = buscar(str(x))
+            if p: return p
+    return ""
+
 # ---------- Dotación: resolución RUT -> contrato / empresa / mutual ----------
 def cargar_dotacion(path_or_file):
     """Lee la dotación (query): Id empleado(RUT), Numero de contrato, fechaInic, idempresa, Mutual, % mutual."""
@@ -161,6 +183,7 @@ def cargar_dotacion(path_or_file):
     cemp = col(["idempresa","empresa"], 6)
     cmut = col(["mutual"], 7)
     cpm = col(["% mutual","cotizacionmutu","cotizacion mutual"], 8)
+    cca = col(["caja","ccaf","cod caja","codigo caja","idcaja","id caja"], -1)
     out = {}
     for _, row in df.iloc[hr+1:].iterrows():
         idv = row[ci] if ci < len(row) else None
@@ -174,6 +197,7 @@ def cargar_dotacion(path_or_file):
             "empresa": str(row[cemp]).strip() if (cemp < len(row) and not pd.isna(row[cemp])) else "",
             "mutual": str(row[cmut]).strip() if (cmut < len(row) and not pd.isna(row[cmut])) else "",
             "pmutual": row[cpm] if (cpm < len(row) and not pd.isna(row[cpm])) else "",
+            "caja": str(row[cca]).strip() if (0 <= cca < len(row) and not pd.isna(row[cca])) else "",
         })
     return out
 
@@ -182,10 +206,10 @@ def resolver_contrato(rut, fecha_ing, periodo, dot):
     de ingreso exacta, o el vigente al período; si no se puede, cae a 1 y se marca."""
     rows = dot.get(rut)
     if not rows:
-        return {"contrato": 1, "empresa": "", "mutual": "", "pmutual": "", "ok": False, "motivo": "RUT no está en la dotación"}
+        return {"contrato": 1, "empresa": "", "mutual": "", "pmutual": "", "caja": "", "ok": False, "motivo": "RUT no está en la dotación"}
     if len(rows) == 1:
         r = rows[0]
-        return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "ok": True, "motivo": ""}
+        return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "caja": r.get("caja",""), "ok": True, "motivo": ""}
     # varios contratos: match por fecha de ingreso exacta
     if fecha_ing is not None:
         try: fd = pd.to_datetime(fecha_ing).date()
@@ -193,7 +217,7 @@ def resolver_contrato(rut, fecha_ing, periodo, dot):
         if fd is not None:
             for r in rows:
                 if r["fechaInic"] is not None and pd.to_datetime(r["fechaInic"]).date() == fd:
-                    return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "ok": True, "motivo": ""}
+                    return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "caja": r.get("caja",""), "ok": True, "motivo": ""}
     # vigente al período: mayor fechaInic <= último día del mes
     try:
         y, m = map(int, str(periodo).split("-")[:2])
@@ -201,10 +225,10 @@ def resolver_contrato(rut, fecha_ing, periodo, dot):
         cand = [r for r in rows if r["fechaInic"] is not None and pd.to_datetime(r["fechaInic"]) <= fin]
         if cand:
             r = max(cand, key=lambda r: pd.to_datetime(r["fechaInic"]))
-            return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "ok": True, "motivo": ""}
+            return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "caja": r.get("caja",""), "ok": True, "motivo": ""}
     except Exception:
         pass
-    return {"contrato": 1, "empresa": "", "mutual": "", "pmutual": "", "ok": False, "motivo": "multi-contrato sin fecha para desambiguar (se usó 1)"}
+    return {"contrato": 1, "empresa": "", "mutual": "", "pmutual": "", "caja": "", "ok": False, "motivo": "multi-contrato sin fecha para desambiguar (se usó 1)"}
 
 OUT_COLS = ["Fecha de proceso","Id empleado","Número de contrato","Id del concepto",
 "Monto del concepto","Afecto","Id de institución","Cotización de jubilación","Días de licencias",
@@ -302,7 +326,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         rebajas = sums.get("afp", 0) + sums.get("isapre", 0) + sums.get("cesEmpleado", 0)
         pactado = _num(row[sidx("sueldo_pactado")]) if sidx("sueldo_pactado") is not None else 0
         # --- resolución de contrato / empresa / mutual por RUT (dotación) ---
-        ncont_e, emp_e, mut_e, pmut_e = ncont, emp_id, mut_id, None
+        ncont_e, emp_e, mut_e, pmut_e, caja_e = ncont, emp_id, mut_id, None, caja_inst
         if dotacion is not None:
             fecha_ing = row[sidx("fecha_ingreso")] if sidx("fecha_ingreso") is not None else None
             rc = resolver_contrato(rut, fecha_ing, periodo, dotacion)
@@ -310,7 +334,9 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             emp_e = rc["empresa"] or emp_id
             mut_e = rc["mutual"] or mut_id
             pmut_e = rc["pmutual"]
+            if rc.get("caja"): caja_e = rc["caja"]
             if homolog and mut_e: mut_e = resolver_inst(mut_e, homolog, {"mu"}) or mut_e
+            if homolog and caja_e: caja_e = resolver_inst(caja_e, homolog, {"ca"}) or caja_e
             if not rc["ok"]: log_contratos.append({"rut": rut, "motivo": rc["motivo"]})
         emp_rows = []
         def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc"):
@@ -330,8 +356,8 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             elif cid == "aporteAFPemp": add(cid, m, afecto=base_afp, inst=idafp, cot=0.1, grp="aporte")
             elif cid == "aporteFAPPCEV": add(cid, m, afecto=base_afp, inst=idafp, grp="aporte")
             elif cid in INST_AFP_CONC: add(cid, m, inst=apv_inst, grp=g)
-            elif cid in INST_CAJA_CONC: add(cid, m, inst=caja_inst, grp=g)
-            elif cid == "cajaComp": add(cid, m, afecto=base_afp, inst=caja_inst, grp=g)
+            elif cid in INST_CAJA_CONC: add(cid, m, inst=caja_e, grp=g)
+            elif cid == "cajaComp": add(cid, m, afecto=base_afp, inst=caja_e, grp=g)
             elif cid in RELIQ:
                 add(cid, m, afecto=base_afp, grp=("aporte" if cid in RELIQ_APO else "desc"))
                 flags.add("Reliquidación cargada como consolidado — revisar devengo (Fecha de aplicación por mes de origen)")
