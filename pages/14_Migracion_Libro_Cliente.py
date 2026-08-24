@@ -9,7 +9,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
 from libro_engine import (norm, load_grid, detect_header_row, match_struct,
-                          classify_and_map, generar_detalle, validar_cuadratura,
+                          classify_and_map, generar_detalle, cargar_homologacion, cargar_dotacion,
                           OUT_COLS, STRUCT)
 
 try:
@@ -39,6 +39,11 @@ def cargar_cot_hist():
     ch = load_workbook(os.path.join(DATA_DIR, "cot_afp_hist.xlsx"), data_only=True).worksheets[0]
     return {f"{ch.cell(row=r,column=2).value}{ch.cell(row=r,column=3).value}": (ch.cell(row=r,column=5).value or 0)
             for r in range(2, ch.max_row + 1)}
+
+@st.cache_data(show_spinner=False)
+def cargar_homolog_default():
+    p = os.path.join(DATA_DIR, "listado_instituciones.xlsx")
+    return cargar_homologacion(p) if os.path.exists(p) else []
 
 def leer_catalogo(file):
     """Detecta col de id (Concepto) y de Nombre. Devuelve (catalog_names, valid_ids)."""
@@ -86,6 +91,17 @@ c1, c2 = st.columns(2)
 libro_file = c1.file_uploader("Libro de remuneraciones del cliente", type=["xlsx", "xls"])
 cat_file = c2.file_uploader("Catálogo de conceptos del cliente (opcional pero recomendado)", type=["xlsx"])
 map_file = st.file_uploader("Mapeo guardado del cliente (opcional, .json)", type=["json"])
+homolog_file = st.file_uploader("Homologación de instituciones (opcional; por defecto usa data/listado_instituciones.xlsx)", type=["xlsx"])
+dot_file = st.file_uploader("Dotación (RUT → contrato / empresa / mutual)", type=["xlsx"])
+
+# --- bajar / subir la tabla de homologación de data/ ---
+_homolog_path = os.path.join(DATA_DIR, "listado_instituciones.xlsx")
+if os.path.exists(_homolog_path):
+    with open(_homolog_path, "rb") as _f:
+        st.download_button("⬇️ Descargar homologación actual (para actualizarla)", _f.read(),
+                           file_name="listado_instituciones.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.caption("Edita esa tabla y vuelve a subirla arriba para actualizar la homologación de instituciones.")
 
 if not libro_file:
     st.info("Sube el libro para comenzar. Con el catálogo del cliente el auto-mapeo es mucho mayor.")
@@ -96,6 +112,8 @@ catalog_names, valid_ids = ({}, set())
 if cat_file: catalog_names, valid_ids = leer_catalogo(cat_file)
 saved = {}
 if map_file: saved = {norm(k): v for k, v in json.load(map_file).items()}
+homolog = cargar_homologacion(homolog_file) if homolog_file else cargar_homolog_default()
+dotacion = cargar_dotacion(dot_file) if dot_file else {}
 
 df, sheet = load_grid(libro_file)
 hr = detect_header_row(df)
@@ -149,16 +167,21 @@ if st.button("🚀 Generar migración detalle", type="primary", disabled=not lis
                num_contrato=int(num_contrato), jornada=jornada, periodo=periodo)
     params_row = cargar_parametros().get(periodo, {})
     if not params_row: st.warning(f"No hay parámetros para {periodo} en data/. Topes/SIS irán en 0.")
-    filas, res = generar_detalle(df, hr, struct, mapping, params_row, cargar_cot_hist(), cfg)
-    val = validar_cuadratura(df, hr, struct, filas)
-    ok = (val["descuadre_haberes"] == 0 and val["descuadre_descuentos"] == 0 and val["descuadre_liquido"] == 0)
+    filas, res = generar_detalle(df, hr, struct, mapping, params_row, cargar_cot_hist(), cfg, homolog=homolog, dotacion=dotacion)
+    ok = (res["descuadre_haberes"] == 0 and res["descuadre_descuentos"] == 0 and res["descuadre_liquido"] == 0)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Empleados", val["empleados"]); m2.metric("Filas", len(filas))
-    m3.metric("Descuadres", val["descuadre_haberes"] + val["descuadre_descuentos"] + val["descuadre_liquido"])
+    m1.metric("Empleados", res["empleados"]); m2.metric("Filas", len(filas))
+    m3.metric("Descuadres", res["descuadre_haberes"] + res["descuadre_descuentos"] + res["descuadre_liquido"])
     m4.metric("Estado", "✅ Cuadra" if ok else "⚠️ Revisar")
     if not ok:
-        st.error(f"Descuadres → haberes: {val['descuadre_haberes']}, descuentos: {val['descuadre_descuentos']}, "
-                 f"líquido: {val['descuadre_liquido']}. Revisa el mapeo (¿algún concepto sin mapear o mal clasificado?).")
+        st.error(f"Descuadres → haberes: {res['descuadre_haberes']}, descuentos: {res['descuadre_descuentos']}, "
+                 f"líquido: {res['descuadre_liquido']}. Revisa el mapeo (¿algún concepto sin mapear o mal clasificado?).")
+    if res.get("log_contratos"):
+        lc = pd.DataFrame(res["log_contratos"])
+        st.warning(f"⚠️ {len(lc)} RUT con problema de contrato/dotación (revisar):")
+        st.dataframe(lc, use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Descargar log rut-contrato (.csv)", lc.to_csv(index=False).encode("utf-8"),
+                           file_name=f"log_contratos_{cliente or 'cliente'}_{periodo}.csv", mime="text/csv")
     for f in res["flags"]: st.warning("⚠️ " + f)
     st.download_button("⬇️ Descargar migración detalle (.xlsx)", to_excel(filas),
                        file_name=f"migracion_detalle_{cliente or 'cliente'}_{periodo}.xlsx",
