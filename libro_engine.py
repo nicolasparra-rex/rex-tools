@@ -189,7 +189,7 @@ def cargar_dotacion(path_or_file):
         idv = row[ci] if ci < len(row) else None
         if pd.isna(idv) or not str(idv).strip(): continue
         rut = str(idv).replace(".", "").strip().upper()
-        try: fi = pd.to_datetime(row[cf]) if (cf < len(row) and not pd.isna(row[cf])) else None
+        try: fi = pd.to_datetime(row[cf], dayfirst=True) if (cf < len(row) and not pd.isna(row[cf])) else None
         except Exception: fi = None
         out.setdefault(rut, []).append({
             "contrato": row[cc] if (cc < len(row) and not pd.isna(row[cc])) else 1,
@@ -261,11 +261,62 @@ def match_struct(hdr):
                     out[campo] = i; used.add(i); break
     return out
 
-def classify_and_map(hdr, struct, catalog_names=None, saved=None):
+# ---------- Catálogo de conceptos del cliente (export de Rex "Lista de conceptos") ----------
+TIPO_BLOQUE = {
+    "haber afecto": "haber", "haber exento": "haber", "haber solo tributable": "haber",
+    "haber afecto especial": "haber", "vacaciones": "haber",
+    "descuento": "desc", "descuento legal": "desc",
+    "aporte empleador": "aporte",
+}
+def tipo_a_bloque(tipo):
+    """Traduce el 'Tipo' del catálogo a bloque haber/desc/aporte. None si es Dato/Valor Guardado
+    (esos no son montos de nómina; caen al respaldo por posición)."""
+    return TIPO_BLOQUE.get(norm(tipo))
+
+def leer_catalogo_rex(path_or_file):
+    """Lee el catálogo de conceptos exportado de Rex (hoja 'Lista de conceptos' u otra).
+    Devuelve (by_id, name_to_id): by_id[id]={'nombre','tipo','bloque'} y name_to_id[norm(nombre)]=id."""
+    xl = pd.ExcelFile(path_or_file)
+    sheet = next((s for s in xl.sheet_names if "concepto" in norm(s)), xl.sheet_names[0])
+    raw = pd.read_excel(path_or_file, sheet_name=sheet, header=None)
+    hr = 0
+    for r in range(min(8, len(raw))):
+        vals = [norm(x) for x in raw.iloc[r].values]
+        if "concepto" in vals and any("nombre" in v for v in vals): hr = r; break
+    hdr = [norm(x) for x in raw.iloc[hr].values]
+    ci = hdr.index("concepto") if "concepto" in hdr else 0
+    ni = next((i for i, v in enumerate(hdr) if "nombre" in v), 2)
+    ti = next((i for i, v in enumerate(hdr) if v == "tipo"), None)
+    by_id, name_to_id = {}, {}
+    for _, row in raw.iloc[hr+1:].iterrows():
+        cid = row[ci]
+        if pd.isna(cid) or not str(cid).strip(): continue
+        cid = str(cid).strip()
+        nom = "" if ni is None or pd.isna(row[ni]) else str(row[ni]).strip()
+        tipo = "" if ti is None or pd.isna(row[ti]) else str(row[ti]).strip()
+        by_id[cid] = {"nombre": nom, "tipo": tipo, "bloque": tipo_a_bloque(tipo)}
+        if nom: name_to_id.setdefault(norm(nom), cid)
+    return by_id, name_to_id
+
+def cargar_base_estandar(path_or_file):
+    """Conjunto de IDs de concepto ESTÁNDAR de Rex (base común), para etiquetar legal vs propio."""
+    try:
+        df = pd.read_excel(path_or_file)
+        col = "Concepto" if "Concepto" in df.columns else df.columns[0]
+        return {str(v).strip() for v in df[col].dropna() if str(v).strip()}
+    except Exception:
+        return set()
+
+def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None):
+    """Propone el ID Rex de cada columna del libro.
+    Prioridad: catálogo del cliente (por nombre) > diccionario legal (solo si el ID existe en el catálogo).
+    Si valid_ids se entrega, cualquier propuesta que NO esté en ese conjunto se descarta (queda pendiente),
+    de modo que nunca se cuela un ID que no exista en el catálogo del cliente."""
     catalog_names = catalog_names or {}; saved = saved or {}
     th = struct.get("total_haberes"); td = struct.get("total_descuentos")
     struct_idx = set(struct.values())
     struct_syn = set(s for syns in STRUCT.values() for s in syns)
+    def _ok(cid): return (valid_ids is None) or (cid in valid_ids)
     filas = []
     for i, h in enumerate(hdr):
         n = norm(h)
@@ -275,21 +326,26 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None):
         elif td is not None and i > td: grupo = "aporte"
         else: grupo = "?"
         cid, fuente, conf = None, "SIN MAPEAR", "-"
-        if n in saved: cid, fuente, conf = saved[n], "guardado", "alta"
-        elif n in CONCEPTO:
-            cid = CONCEPTO[n]; fuente, conf = "diccionario", "alta"
-            if cid == "__SOBREGIRO__": cid, conf = ("compensaSobre" if grupo == "haber" else "sobregiro_anterior"), "media"
-            if cid == "__ISAPRE_AD__": cid = "isapre"
-        elif n in catalog_names: cid, fuente, conf = catalog_names[n], "catalogo", "media"
+        if n in saved and _ok(saved[n]):
+            cid, fuente, conf = saved[n], "guardado", "alta"
+        elif n in catalog_names:                                   # el catálogo del cliente manda
+            cid, fuente, conf = catalog_names[n], "catálogo", "alta"
+        elif n in CONCEPTO:                                        # diccionario legal, solo si existe en el catálogo
+            c = CONCEPTO[n]
+            if c == "__SOBREGIRO__": c = "compensaSobre" if grupo == "haber" else "sobregiro_anterior"
+            if c == "__ISAPRE_AD__": c = "isapre"
+            if _ok(c): cid, fuente, conf = c, "diccionario", "media"
         filas.append({"col": i+1, "header": h, "grupo": grupo, "id_rex": cid, "fuente": fuente, "confianza": conf})
     return filas
 
-def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, config, homolog=None, dotacion=None):
+def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, config, homolog=None, dotacion=None, tipo_map=None):
     """mapping: {norm(header): id_rex}. Suma columnas del mismo id. Cuadra al peso."""
     periodo = config["periodo"]; emp_id = config.get("empresa_id", ""); mut_id = config.get("mutual_id", "")
     apv_inst = config.get("apv_inst", "afp"); caja_inst = config.get("caja_inst", "losandes")
     ncont = config.get("num_contrato", 1); jornada = config.get("jornada", "C")
-    tope_salud = _num(params_row.get("topeSalud_pesos", 0)); sis_pct = _num(params_row.get("sis", 0))
+    # Tope imponible de salud = tope imponible AFP (mismo techo, ~90 UF). OJO: NO es topeSalud_pesos,
+    # que es el 7% del tope (monto máx. de cotización), no la base imponible.
+    tope_salud = _num(params_row.get("topeImp_pesos_afp", 0)); sis_pct = _num(params_row.get("sis", 0))
     if homolog:
         mut_id = resolver_inst(mut_id, homolog, {"mu"}) or mut_id
         caja_inst = resolver_inst(caja_inst, homolog, {"ca"}) or caja_inst
@@ -307,44 +363,59 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if td_i is not None and th_i is not None and th_i < i < td_i: return "desc"
         if td_i is not None and i > td_i: return "aporte"
         return "desc"
-    filas = []; flags = set(); empleados = 0; bh = bd = bt = 0; log_contratos = []
+    filas = []; flags = set(); empleados = 0; omitidos = 0; bh = bd = bt = 0; log_contratos = []
+    _ETIQ = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja"}
+    inst_seen = {}  # (clasif, valor_libro) -> id_rex resuelto (o None si no homologó)
+    def _reg_inst(clasif, raw, resuelto):
+        s = str(raw).strip()
+        if not s or s.lower() in ("0", "nan", "none"): return
+        inst_seen.setdefault((clasif, s), resuelto)
     for _, row in df.iloc[header_row+1:].iterrows():
         rut = str(row[sidx("rut")]).replace(".", "").strip().upper() if sidx("rut") is not None else ""
         if not rut or rut.lower() == "nan" or not rut[0].isdigit() or "total" in rut.lower(): continue
+        # --- contrato/empresa/mutual por RUT (dotación) — primero, para poder OMITIR a quien no esté ---
+        ncont_e, emp_e, mut_e, pmut_e, caja_e = ncont, emp_id, mut_id, None, caja_inst
+        if dotacion:
+            fecha_ing = row[sidx("fecha_ingreso")] if sidx("fecha_ingreso") is not None else None
+            rc = resolver_contrato(rut, fecha_ing, periodo, dotacion)
+            if not rc["ok"]:
+                log_contratos.append({"rut": rut, "motivo": rc["motivo"]})
+                omitidos += 1
+                continue                                  # no está en la dotación -> se OMITE del archivo
+            if rc["contrato"] not in (None, ""): ncont_e = rc["contrato"]
+            emp_e = rc["empresa"] or emp_id
+            mut_e = rc["mutual"] or mut_id
+            pmut_e = rc["pmutual"]
+            if rc.get("caja"): caja_e = rc["caja"]
+            if homolog and mut_e:
+                _mr = resolver_inst(mut_e, homolog, {"mu"}); _reg_inst("mu", mut_e, _mr); mut_e = _mr or mut_e
+            if homolog and caja_e:
+                _cr = resolver_inst(caja_e, homolog, {"ca"}); _reg_inst("ca", caja_e, _cr); caja_e = _cr or caja_e
         empleados += 1
         dt = int(_num(row[sidx("dias_trab")])) if sidx("dias_trab") is not None else 0
         base_afp = _num(row[sidx("base_afp")]) if sidx("base_afp") is not None else 0
         base_ces = _num(row[sidx("base_ces")]) if sidx("base_ces") is not None else base_afp
         base_trib = _num(row[sidx("base_trib")]) if sidx("base_trib") is not None else 0
         afp_raw = (row[sidx("afp")] if sidx("afp") is not None and pd.notna(row[sidx("afp")]) else 0) or 0
-        idafp = (resolver_inst(afp_raw, homolog, {"af"}) if homolog else None) or afp_raw
+        idafp_res = resolver_inst(afp_raw, homolog, {"af"}) if homolog else None
+        idafp = idafp_res or afp_raw
+        _reg_inst("af", afp_raw, idafp_res)
         sal = row[sidx("salud")] if sidx("salud") is not None and pd.notna(row[sidx("salud")]) else ""
-        idsal = (resolver_inst(sal, homolog, {"is"}) if homolog else None) or (norm(sal).replace("_", "").replace(" ", "") if sal else 0)
+        idsal_res = resolver_inst(sal, homolog, {"is"}) if homolog else None
+        idsal = idsal_res or (norm(sal).replace("_", "").replace(" ", "") if sal else 0)
+        _reg_inst("is", sal, idsal_res)
         cot_afp = _num(cot_hist.get(f"{periodo}{idafp}", 0)) * 100
         liq = _num(row[sidx("liquido")]) if sidx("liquido") is not None else 0
         sums = {cid: sum(_num(row[i]) for i in cols) for cid, cols in id_cols.items()}
         rebajas = sums.get("afp", 0) + sums.get("isapre", 0) + sums.get("cesEmpleado", 0)
         pactado = _num(row[sidx("sueldo_pactado")]) if sidx("sueldo_pactado") is not None else 0
-        # --- resolución de contrato / empresa / mutual por RUT (dotación) ---
-        ncont_e, emp_e, mut_e, pmut_e, caja_e = ncont, emp_id, mut_id, None, caja_inst
-        if dotacion is not None:
-            fecha_ing = row[sidx("fecha_ingreso")] if sidx("fecha_ingreso") is not None else None
-            rc = resolver_contrato(rut, fecha_ing, periodo, dotacion)
-            if rc["contrato"] not in (None, ""): ncont_e = rc["contrato"]
-            emp_e = rc["empresa"] or emp_id
-            mut_e = rc["mutual"] or mut_id
-            pmut_e = rc["pmutual"]
-            if rc.get("caja"): caja_e = rc["caja"]
-            if homolog and mut_e: mut_e = resolver_inst(mut_e, homolog, {"mu"}) or mut_e
-            if homolog and caja_e: caja_e = resolver_inst(caja_e, homolog, {"ca"}) or caja_e
-            if not rc["ok"]: log_contratos.append({"rut": rut, "motivo": rc["motivo"]})
         emp_rows = []
         def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc"):
             emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, cot, 0, dt,
                              "x", emp_e, round(reb), 0, 0, jornada, "", round(init), 1]))
         for cid, cols in id_cols.items():
             if cid == "impuesto": continue
-            m = sums[cid]; g = grp_of(cols)
+            m = sums[cid]; g = (tipo_map or {}).get(cid) or grp_of(cols)
             if cid == "afp": add(cid, m, afecto=base_afp, inst=idafp, cot=cot_afp, grp=g)
             elif cid == "isapre":
                 af = base_afp if idsal == "fonasa" else (min(base_afp, tope_salud) if tope_salud else base_afp)
@@ -373,13 +444,17 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         TD = _num(row[sidx("total_descuentos")]) if td_i is not None else D
         if abs(H - TH) > 2: bh += 1
         if abs(D - TD) > 2: bd += 1
-        if abs(T - liq) > 2: bt += 1
+        if abs((H - D) - liq) > 2: bt += 1   # líquido = haberes − descuentos (los aportes no cuentan)
         for g, r in emp_rows:
             if r[3] == "impuesto" or _num(r[4]) != 0 or r[3] == "totalesEmpl":
                 filas.append(r)
-    return filas, {"empleados": empleados, "filas": len(filas), "flags": sorted(flags),
+    log_inst = [{"tipo": _ETIQ.get(cl, cl), "valor_libro": raw,
+                 "id_rex": (res if res else ""), "estado": ("OK" if res else "SIN HOMOLOGAR")}
+                for (cl, raw), res in sorted(inst_seen.items())]
+    return filas, {"empleados": empleados, "omitidos": omitidos, "filas": len(filas), "flags": sorted(flags),
                    "descuadre_haberes": bh, "descuadre_descuentos": bd, "descuadre_liquido": bt,
-                   "log_contratos": log_contratos}
+                   "log_contratos": log_contratos, "log_inst": log_inst,
+                   "homolog_vacia": not bool(homolog)}
 
 def validar_cuadratura(df, header_row, struct, filas):
     """Compatibilidad: la cuadratura ahora viene en el resumen de generar_detalle."""
