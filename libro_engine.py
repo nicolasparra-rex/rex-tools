@@ -233,7 +233,7 @@ def resolver_contrato(rut, fecha_ing, periodo, dot):
 OUT_COLS = ["Fecha de proceso","Id empleado","Número de contrato","Id del concepto",
 "Monto del concepto","Afecto","Id de institución","Cotización de jubilación","Días de licencias",
 "Días trabajados","Fecha de aplicación","Empresa","Total de rebajas por LLSS","Rentas no gravadas",
-"Rebaja por zona extrema","Jornada","Días de vacaciones","Monto Init","Fase"]
+"Rebaja por zona extrema","Jornada","Días de vacaciones","Monto Init","Fase","parcial7","parcial8"]
 
 def load_grid(path, sheet_hint="libro"):
     xls = pd.ExcelFile(path)
@@ -364,6 +364,8 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if td_i is not None and i > td_i: return "aporte"
         return "desc"
     filas = []; flags = set(); empleados = 0; omitidos = 0; bh = bd = bt = 0; log_contratos = []
+    if sidx("dias_trab") is None:
+        flags.add("El libro no trae 'Días Trabajados': se asumieron 30 días por trabajador — revisar con el consultor.")
     _ETIQ = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja"}
     inst_seen = {}  # (clasif, valor_libro) -> id_rex resuelto (o None si no homologó)
     def _reg_inst(clasif, raw, resuelto):
@@ -392,7 +394,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             if homolog and caja_e:
                 _cr = resolver_inst(caja_e, homolog, {"ca"}); _reg_inst("ca", caja_e, _cr); caja_e = _cr or caja_e
         empleados += 1
-        dt = int(_num(row[sidx("dias_trab")])) if sidx("dias_trab") is not None else 0
+        dt = int(_num(row[sidx("dias_trab")])) if sidx("dias_trab") is not None else 30
         base_afp = _num(row[sidx("base_afp")]) if sidx("base_afp") is not None else 0
         base_ces = _num(row[sidx("base_ces")]) if sidx("base_ces") is not None else base_afp
         base_trib = _num(row[sidx("base_trib")]) if sidx("base_trib") is not None else 0
@@ -410,20 +412,23 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         rebajas = sums.get("afp", 0) + sums.get("isapre", 0) + sums.get("cesEmpleado", 0)
         pactado = _num(row[sidx("sueldo_pactado")]) if sidx("sueldo_pactado") is not None else 0
         emp_rows = []
-        def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc"):
+        def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc", p7=0, p8=0):
             emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, cot, 0, dt,
-                             "x", emp_e, round(reb), 0, 0, jornada, "", round(init), 1]))
+                             "x", emp_e, round(reb), 0, 0, jornada, "", round(init), 1, round(p7), round(p8)]))
         for cid, cols in id_cols.items():
             if cid == "impuesto": continue
             m = sums[cid]; g = (tipo_map or {}).get(cid) or grp_of(cols)
             if cid == "afp": add(cid, m, afecto=base_afp, inst=idafp, cot=cot_afp, grp=g)
             elif cid == "isapre":
                 af = base_afp if idsal == "fonasa" else (min(base_afp, tope_salud) if tope_salud else base_afp)
-                add(cid, m, afecto=af, inst=idsal, grp=g)
+                # parcial8 (isapre) = tope imponible del mes
+                add(cid, m, afecto=af, inst=idsal, grp=g, p8=tope_salud)
             elif cid == "cesEmpleado": add(cid, m, afecto=base_ces, inst=idafp, cot=0.6, grp=g)
             elif cid == "mutual": add(cid, m, afecto=base_afp, inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
             elif cid == "sis": add(cid, m, afecto=base_afp, inst=idafp, cot=sis_pct, grp="aporte")
-            elif cid in ("cesAporteCi", "cesAporteSol"): add(cid, m, afecto=base_ces, inst=idafp, grp="aporte")
+            # parcial8 (cesAporteSol) = imponible del mes (base del aporte solidario)
+            elif cid in ("cesAporteCi", "cesAporteSol"):
+                add(cid, m, afecto=base_ces, inst=idafp, grp="aporte", p8=(base_afp if cid == "cesAporteSol" else 0))
             elif cid == "aporteAFPemp": add(cid, m, afecto=base_afp, inst=idafp, cot=0.1, grp="aporte")
             elif cid == "aporteFAPPCEV": add(cid, m, afecto=base_afp, inst=idafp, grp="aporte")
             elif cid in INST_AFP_CONC: add(cid, m, inst=apv_inst, grp=g)
@@ -435,7 +440,8 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             else:
                 add(cid, m, init=((pactado or m) if cid == "sueldoBase" else 0), grp=g)
         trib = base_trib if base_trib else max(base_afp - rebajas, 0)
-        add("impuesto", sums.get("impuesto", 0), afecto=trib, reb=rebajas, grp="desc")
+        # parcial7 (impuesto) = total de rebajas por leyes sociales (mismo valor que la col 12)
+        add("impuesto", sums.get("impuesto", 0), afecto=trib, reb=rebajas, grp="desc", p7=rebajas)
         add("totalesEmpl", liq, afecto=base_afp, grp="total")
         H = sum(r[4] for g, r in emp_rows if g == "haber")
         D = sum(r[4] for g, r in emp_rows if g == "desc")
