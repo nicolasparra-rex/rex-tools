@@ -315,8 +315,15 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
     catalog_names = catalog_names or {}; saved = saved or {}
     th = struct.get("total_haberes"); td = struct.get("total_descuentos")
     struct_idx = set(struct.values())
-    struct_syn = set(s for syns in STRUCT.values() for s in syns)
+    # Sinónimos estructurales para excluir por NOMBRE. Se excluyen afp/salud/imponibles porque un cliente
+    # puede tener columnas de CONCEPTO llamadas así (ej. 'afp' = monto de cotización, no la institución);
+    # esas columnas estructurales igual se saltan por su posición detectada (struct_idx).
+    _NO_SYN = {"afp", "salud", "base_afp", "base_ces", "base_trib"}
+    struct_syn = set(s for campo, syns in STRUCT.items() if campo not in _NO_SYN for s in syns)
     def _ok(cid): return (valid_ids is None) or (cid in valid_ids)
+    # Algunos libros ya traen los IDs de Rex como encabezado (ej. 'sueldoBase', 'cesAporteSol').
+    # Permitimos casar el header directamente contra un ID del catálogo (por nombre normalizado).
+    id_norm = {norm(c): c for c in (valid_ids or [])}
     filas = []
     for i, h in enumerate(hdr):
         n = norm(h)
@@ -330,6 +337,8 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
             cid, fuente, conf = saved[n], "guardado", "alta"
         elif n in catalog_names:                                   # el catálogo del cliente manda
             cid, fuente, conf = catalog_names[n], "catálogo", "alta"
+        elif n in id_norm:                                          # el header YA es un ID del catálogo
+            cid, fuente, conf = id_norm[n], "id-catálogo", "alta"
         elif n in CONCEPTO:                                        # diccionario legal, solo si existe en el catálogo
             c = CONCEPTO[n]
             if c == "__SOBREGIRO__": c = "compensaSobre" if grupo == "haber" else "sobregiro_anterior"
@@ -353,8 +362,10 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
     hdr = [x if str(x) != "nan" else "" for x in df.iloc[header_row].values]
     th_i = struct.get("total_haberes"); td_i = struct.get("total_descuentos")
     def sidx(k): return struct.get(k)
+    _struct_idx = set(struct.values())   # columnas estructurales: NO son conceptos aunque su nombre coincida
     id_cols = OrderedDict()
     for i, h in enumerate(hdr):
+        if i in _struct_idx: continue
         cid = mapping.get(norm(h))
         if cid: id_cols.setdefault(cid, []).append(i)
     def grp_of(cols):
@@ -395,9 +406,6 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                 _cr = resolver_inst(caja_e, homolog, {"ca"}); _reg_inst("ca", caja_e, _cr); caja_e = _cr or caja_e
         empleados += 1
         dt = int(_num(row[sidx("dias_trab")])) if sidx("dias_trab") is not None else 30
-        base_afp = _num(row[sidx("base_afp")]) if sidx("base_afp") is not None else 0
-        base_ces = _num(row[sidx("base_ces")]) if sidx("base_ces") is not None else base_afp
-        base_trib = _num(row[sidx("base_trib")]) if sidx("base_trib") is not None else 0
         afp_raw = (row[sidx("afp")] if sidx("afp") is not None and pd.notna(row[sidx("afp")]) else 0) or 0
         idafp_res = resolver_inst(afp_raw, homolog, {"af"}) if homolog else None
         idafp = idafp_res or afp_raw
@@ -410,6 +418,21 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         liq = _num(row[sidx("liquido")]) if sidx("liquido") is not None else 0
         sums = {cid: sum(_num(row[i]) for i in cols) for cid, cols in id_cols.items()}
         rebajas = sums.get("afp", 0) + sums.get("isapre", 0) + sums.get("cesEmpleado", 0)
+        # Renta imponible AFP: del libro si viene; si NO (el libro no la trae), se DERIVA del monto de una
+        # cotización que sea % puro del imponible (AFP ÷ tasa, o SIS ÷ tasa). No afecta la cuadratura
+        # (que va por montos); solo alimenta la columna "Afecto". Se avisa para revisar.
+        base_afp = _num(row[sidx("base_afp")]) if sidx("base_afp") is not None else 0
+        if base_afp <= 0:
+            afp_m = sums.get("afp", 0); sis_m = sums.get("sis", 0)
+            if afp_m > 0 and cot_afp > 0:
+                base_afp = round(afp_m / (cot_afp / 100.0))
+                flags.add("El libro no trae la renta imponible: se derivó del AFP (monto ÷ tasa) — revisar con el consultor.")
+            elif sis_m > 0 and sis_pct > 0:
+                base_afp = round(sis_m / (sis_pct / 100.0))
+                flags.add("El libro no trae la renta imponible: se derivó del SIS (monto ÷ tasa) — revisar con el consultor.")
+        base_ces = _num(row[sidx("base_ces")]) if sidx("base_ces") is not None else base_afp
+        if base_ces <= 0: base_ces = base_afp
+        base_trib = _num(row[sidx("base_trib")]) if sidx("base_trib") is not None else 0
         pactado = _num(row[sidx("sueldo_pactado")]) if sidx("sueldo_pactado") is not None else 0
         emp_rows = []
         def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc", p7=0, p8=0):
@@ -417,6 +440,12 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                              "x", emp_e, round(reb), 0, 0, jornada, "", round(init), 1, round(p7), round(p8)]))
         for cid, cols in id_cols.items():
             if cid == "impuesto": continue
+            # Sobregiro: concepto dependiente de la POSICIÓN del mes (haber = compensaSobre, descuento =
+            # sobregiro_anterior). Se re-decide por mes para soportar un mapeo único en modo multi-mes.
+            if cid in ("compensaSobre", "sobregiro_anterior"):
+                _gs = grp_of(cols)
+                _cs = "compensaSobre" if _gs == "haber" else "sobregiro_anterior"
+                add(_cs, sums[cid], grp=("haber" if _gs == "haber" else "desc")); continue
             m = sums[cid]; g = (tipo_map or {}).get(cid) or grp_of(cols)
             if cid == "afp": add(cid, m, afecto=base_afp, inst=idafp, cot=cot_afp, grp=g)
             elif cid == "isapre":
