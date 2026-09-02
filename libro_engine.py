@@ -2,12 +2,170 @@
 """Motor de lectura de 'libro de remuneraciones' de cualquier cliente -> mapeo a conceptos Rex.
 Autodetección de estructura + clasificación por bloque (posición) + propuesta de ID por
 sinónimos y catálogo del cliente. Suma columnas que van al mismo concepto. Cuadra al peso."""
-import unicodedata, calendar, pandas as pd
+import unicodedata, calendar, re, pandas as pd
 from collections import OrderedDict
 
 def norm(s):
     if s is None: return ""
     return "".join(c for c in unicodedata.normalize("NFD", str(s).strip().lower()) if unicodedata.category(c) != "Mn")
+
+# --- Matching tolerante GENÉRICO (no depende del cliente) ---
+# Muchos libros etiquetan el mismo nombre con sufijos: "Bono Escolar (D)", "Bono Escolar (Imponible)",
+# "Dias Trab.-", "Sueldo Base :". Estas etiquetas rompen el match exacto contra el catálogo.
+# Generamos variantes cada vez más "limpias" quitando SOLO adornos de borde (paréntesis finales y
+# puntuación de borde) — sin inventar sinónimos por cliente. El resultado es una SUGERENCIA que el
+# consultor revisa (nunca se aplica a ciegas), justamente para no arriesgar dobles conteos.
+_TAG_FIN = re.compile(r"\s*\([^()]*\)\s*$")     # un grupo (...) al final: (d), (imponible), (l)...
+_PUNT_FIN = re.compile(r"[\.\-·:;,*_/\s]+$")     # puntuación de borde: .- : ; , * _ /
+
+def base_variantes(n):
+    """Devuelve variantes progresivamente más limpias de un nombre YA normalizado.
+    Genérico: solo quita etiquetas entre paréntesis al final y puntuación de borde."""
+    out, cur = [], n
+    for _ in range(4):                          # hasta 4 etiquetas encadenadas
+        nxt = _PUNT_FIN.sub("", cur)
+        nxt = _TAG_FIN.sub("", nxt)
+        nxt = re.sub(r"\s{2,}", " ", nxt).strip()
+        if not nxt or nxt == cur:
+            break
+        cur = nxt
+        out.append(cur)
+    return out
+
+# --- Match por SIMILITUD (palabra por palabra), GENÉRICO ---
+# Rescata diferencias de redacción que el match exacto/tolerante no ve: "Bono Nacimiento" vs
+# "Bono de Nacimiento", "Beca de Estudio" vs "Beca de Estudios", "...Seguridad (IS)" vs "...Seguridad IS".
+# Es SIEMPRE sugerencia (confianza='revisar'): puede apuntar a un "hermano" (ej. varios tipos de trato),
+# así que el consultor la confirma. Nunca se aplica a ciegas.
+_STOP_FUZZY = {"de", "del", "la", "el", "los", "las", "mi", "y", "a", "d", "h", "l", "s"}
+# Abreviaturas estándar de nómina chilena -> palabra completa. GENÉRICO (no depende del cliente).
+# Se expanden ANTES de comparar, para que 'Asig. Caja' calce con 'Asignación Caja', etc.
+_ABREV = {"asig": "asignacion", "ptmo": "prestamo", "pmo": "prestamo", "prest": "prestamo",
+          "indem": "indemnizacion", "indemn": "indemnizacion", "dif": "diferencia",
+          "grat": "gratificacion", "vac": "vacaciones", "cotiz": "cotizacion",
+          "rem": "remuneracion", "remun": "remuneracion", "comp": "compensacion"}
+
+def _tokens(s):
+    s = norm(s)
+    s = re.sub(r"(?:[a-z]\.){2,}[a-z]?", lambda m: m.group(0).replace(".", ""), s)  # C.C.A.F. -> ccaf, A.F.P. -> afp
+    for ch in "()[]{}*.-·:;,/\\": s = s.replace(ch, " ")
+    out = set()
+    for w in s.split():
+        if not w or w in _STOP_FUZZY: continue
+        for part in _ABREV.get(w, w).split(): out.add(part)
+    return out
+
+# Diccionario LEGAL por PALABRA CLAVE (contiene). GENÉRICO: conceptos legales/institucionales de
+# Chile que cualquier cliente puede nombrar de mil formas. Cada regla: (tokens que deben estar TODOS,
+# id_rex). Se propone SOLO si ese id existe en el catálogo del cliente, y queda marcado 'revisar'.
+# Orden: de lo más específico a lo más general (se toma la primera regla que calza).
+LEGAL_KW = [
+    (("capitalizacion", "individual"), "aporteAFPemp"),   # Ley 21.735 (reforma previsional)
+    (("expectativa", "vida"),          "aporteFAPPCEV"),   # Ley 21.735
+    (("ahorro", "previsional", "voluntario"), "apvi"),
+    (("falp",),                        "FALP"),
+    (("sis", "empleador"),             "sis"),
+    (("prestamo", "solidario"),        "solidarioremu"),
+    (("fondo", "cesantia", "trabajador"), "cesEmpleado"),
+    (("seguro", "cesantia", "trabajador"), "cesEmpleado"),
+    (("patronal", "mutual"),           "mutual"),   # aporte mutual empleador (no confundir con ley 21227)
+    (("empleador", "mutual"),          "mutual"),
+]
+
+# CAJA DE COMPENSACIÓN (CCAF): regla de negocio — NO se diferencia por institución. Cualquier caja
+# del mismo TIPO (préstamo/ahorro/seguro/dental/leasing) va al MISMO concepto genérico. Esta regla
+# tiene PRIORIDAD sobre el match del catálogo (colapsa incluso los conceptos específicos por caja,
+# ej. PrestamoCaja18/PrestamoAraucana -> cajaCred). Orden: lo más específico primero.
+CAJA_KW = [
+    (("ccaf", "dental"),         "cajaDent"),
+    (("ccaf", "leasing"),        "cajaLeas"),
+    (("ccaf", "seguro", "vida"), "cajaVida"),
+    (("ccaf", "seguro"),         "cajaSegu"),
+    (("ccaf", "ahorro"),         "cajaAhor"),
+    (("ccaf", "prestamo"),       "cajaCred"),  # 'ptmo' -> 'prestamo' por _ABREV
+    (("ccaf", "credito"),        "cajaCred"),
+]
+
+def _match_kw(n, reglas, valid_ids):
+    toks = _tokens(n)
+    for kws, cid in reglas:
+        if valid_ids is not None and cid not in valid_ids:
+            continue
+        if all(any(t == k or t.startswith(k) for t in toks) for k in kws):
+            return cid
+    return None
+
+def sugerir_caja(n, valid_ids):
+    """Regla de caja (CCAF) con prioridad sobre el catálogo: colapsa cualquier caja al genérico por tipo."""
+    return _match_kw(n, CAJA_KW, valid_ids)
+
+def sugerir_cesantia_empl(n, valid_ids):
+    """Aporte de cesantía del EMPLEADOR que viene AGRUPADO en 1 columna (no separado en Ci/Sol).
+    Devuelve el pseudo 'cesAporteEmpl' para que el motor lo divida en cesAporteCi + cesAporteSol
+    según tipo de contrato/antigüedad. Solo si el catálogo tiene ambos destinos de la división.
+    Si el libro YA lo trae separado (dice 'ci'/'solidario') no aplica: eso lo mapea el catálogo."""
+    toks = _tokens(n)
+    if "cesantia" not in toks: return None
+    if "trabajador" in toks: return None                                  # ese es del trabajador (cesEmpleado)
+    if any(t in toks for t in ("ci", "solidario", "sol")): return None    # ya viene separado
+    if any(t.startswith("reliquid") for t in toks): return None           # reliquidación
+    if not any(t in toks for t in ("empleador", "patronal")): return None
+    if valid_ids is not None and not ({"cesAporteCi", "cesAporteSol"} <= set(valid_ids)):
+        return None                                                       # sin destinos donde caer la división
+    return "cesAporteEmpl"
+
+# Palabras COMUNES/genéricas: no bastan para un match por similitud (aparecen en muchos conceptos).
+# Un match por similitud debe compartir al menos UNA palabra distintiva (no de esta lista).
+_GENERICO = {"aporte", "aportes", "empleador", "empleadora", "trabajador", "patronal", "cargo",
+             "descuento", "descuentos", "seguro", "seguros", "caja", "ccaf", "bono", "asignacion",
+             "mensual", "monto", "otros", "otro", "haber", "haberes", "total", "dias", "dia", "ley"}
+
+def sugerir_legal_kw(n, valid_ids):
+    """Devuelve el id_rex de la primera regla legal cuyas palabras clave estén TODAS en el nombre
+    (por token, tolerando plural/sufijo con startswith). Solo IDs presentes en valid_ids."""
+    return _match_kw(n, LEGAL_KW, valid_ids)
+
+def _tok_eq(a, b):
+    """Dos tokens 'iguales' tolerando plural/género/sufijo: iguales, o comparten un prefijo largo
+    (>=5). Casa 'pasaje/pasajes', 'nocturno/nocturnidad', 'expectativa/expectativas'; NO 'comida/comision'."""
+    if a == b: return True
+    if len(a) < 5 or len(b) < 5: return False
+    p = 0
+    for x, y in zip(a, b):
+        if x != y: break
+        p += 1
+    return p >= 5
+
+def sugerir_similar(n, cat_tokens):
+    """cat_tokens: {nombre_norm: set(tokens)}. Devuelve el nombre_norm más parecido o None.
+    Empareja palabra por palabra con equivalencia difusa (plural/sufijo). NO exige subconjunto exacto:
+    basta ALTO solapamiento del lado más chico (>=60%) con al menos 2 palabras reales en común (evita
+    ruido de 1 sola palabra). Entre candidatos: mayor solapamiento, luego Jaccard, luego nombre más corto."""
+    ht = _tokens(n)
+    if not ht: return None
+    mejor, mejor_key = None, None
+    for nm, ct in cat_tokens.items():
+        if not ct: continue
+        used = set(); m = 0; distintiva = False
+        for a in ht:
+            for j, b in enumerate(ct):
+                if j in used: continue
+                if _tok_eq(a, b):
+                    m += 1; used.add(j)
+                    if a not in _GENERICO: distintiva = True
+                    break
+        if m < 2:                               # 1 sola palabra en común es ruido/ambiguo
+            continue
+        if not distintiva:                      # solo palabras genéricas (aporte, empleador...) → no basta
+            continue
+        cont = m / min(len(ht), len(ct))        # solapamiento del lado más chico
+        if cont < 0.6:
+            continue
+        jac = m / (len(ht) + len(ct) - m)
+        key = (round(cont, 3), round(jac, 3), m, -len(nm))
+        if mejor_key is None or key > mejor_key:
+            mejor, mejor_key = nm, key
+    return mejor
 
 def _num(v):
     return v if isinstance(v, (int, float)) and pd.notna(v) else 0
@@ -16,19 +174,21 @@ def _num(v):
 STRUCT = {
  "rut": ["numero de documento","rut trabajador","rut del trabajador","rut","n de documento","n documento"],
  "nombre": ["nombre completo","nombre","apellido y nombre","nombre trabajador"],
- "dias_trab": ["dias trabajados"],
+ "dias_trab": ["dias trabajados","dias trab","dias trabajados.-"],
  "afp": ["fondo de cotizacion","afp","prevision"],
  "salud": ["fonasa/isapre","salud","isapre"],
- "base_afp": ["base imponible afp","imponible afp","imp. prev./salud","imponible","imponible topeado"],
+ "base_afp": ["base imponible afp","imponible afp","imp. prev./salud","imponible","imponible topeado",
+              "monto afecto a leyes sociales","afecto a leyes sociales","monto afecto leyes sociales"],
  "base_ces": ["base imponible cesantia","imponible cesantia","imp. cesantia","imponible seguro cesantia"],
- "base_trib": ["base tributable","tributable","afecto impuesto"],
+ "base_trib": ["base tributable","tributable","afecto impuesto","monto afecto a impuesto","afecto a impuesto"],
  "total_haberes": ["total haberes"],
  "total_descuentos": ["total descuentos"],
  "total_aportes": ["total aportes"],
  "liquido": ["liquido a pago","liquido a recibir","liquido"],
  "plan_uf": ["plan isapre uf","plan isapre"],
  "tramo": ["tramo"],
- "sueldo_pactado": ["sueldo contractual","sueldo base pactado","sueldo pactado"],
+ "sueldo_pactado": ["sueldo contractual","sueldo base pactado","sueldo pactado",
+                    "sueldo base contrato","sueldo base contractual","sueldo contrato","sueldo base de contrato"],
  "fecha_ingreso": ["fecha de ingreso","fecha ingreso compania","fecha ingreso","fecha de alta","inicio contrato"],
 }
 IGNORAR = {"sueldo","plan uf","fecha de baja","departamento","tipo de empleado","id centro de costo",
@@ -184,6 +344,7 @@ def cargar_dotacion(path_or_file):
     cmut = col(["mutual"], 7)
     cpm = col(["% mutual","cotizacionmutu","cotizacion mutual"], 8)
     cca = col(["caja","ccaf","cod caja","codigo caja","idcaja","id caja"], -1)
+    ctc = col(["tipocont","tipo contrato","tipo de contrato","tipo cont"], -1)
     out = {}
     for _, row in df.iloc[hr+1:].iterrows():
         idv = row[ci] if ci < len(row) else None
@@ -198,18 +359,22 @@ def cargar_dotacion(path_or_file):
             "mutual": str(row[cmut]).strip() if (cmut < len(row) and not pd.isna(row[cmut])) else "",
             "pmutual": row[cpm] if (cpm < len(row) and not pd.isna(row[cpm])) else "",
             "caja": str(row[cca]).strip() if (0 <= cca < len(row) and not pd.isna(row[cca])) else "",
+            "tipoCont": str(row[ctc]).strip().upper() if (0 <= ctc < len(row) and not pd.isna(row[ctc])) else "",
         })
     return out
 
 def resolver_contrato(rut, fecha_ing, periodo, dot):
     """Resuelve el contrato del RUT (lógica del sitio): 1 contrato -> directo; varios -> por fecha
     de ingreso exacta, o el vigente al período; si no se puede, cae a 1 y se marca."""
+    def _ret(r, ok, motivo):
+        return {"contrato": r.get("contrato", 1), "empresa": r.get("empresa", ""), "mutual": r.get("mutual", ""),
+                "pmutual": r.get("pmutual", ""), "caja": r.get("caja", ""), "tipoCont": r.get("tipoCont", ""),
+                "fechaInic": r.get("fechaInic"), "ok": ok, "motivo": motivo}
     rows = dot.get(rut)
     if not rows:
-        return {"contrato": 1, "empresa": "", "mutual": "", "pmutual": "", "caja": "", "ok": False, "motivo": "RUT no está en la dotación"}
+        return _ret({}, False, "RUT no está en la dotación")
     if len(rows) == 1:
-        r = rows[0]
-        return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "caja": r.get("caja",""), "ok": True, "motivo": ""}
+        return _ret(rows[0], True, "")
     # varios contratos: match por fecha de ingreso exacta
     if fecha_ing is not None:
         try: fd = pd.to_datetime(fecha_ing).date()
@@ -217,18 +382,17 @@ def resolver_contrato(rut, fecha_ing, periodo, dot):
         if fd is not None:
             for r in rows:
                 if r["fechaInic"] is not None and pd.to_datetime(r["fechaInic"]).date() == fd:
-                    return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "caja": r.get("caja",""), "ok": True, "motivo": ""}
+                    return _ret(r, True, "")
     # vigente al período: mayor fechaInic <= último día del mes
     try:
         y, m = map(int, str(periodo).split("-")[:2])
         fin = pd.Timestamp(y, m, calendar.monthrange(y, m)[1])
         cand = [r for r in rows if r["fechaInic"] is not None and pd.to_datetime(r["fechaInic"]) <= fin]
         if cand:
-            r = max(cand, key=lambda r: pd.to_datetime(r["fechaInic"]))
-            return {"contrato": r["contrato"], "empresa": r["empresa"], "mutual": r["mutual"], "pmutual": r["pmutual"], "caja": r.get("caja",""), "ok": True, "motivo": ""}
+            return _ret(max(cand, key=lambda r: pd.to_datetime(r["fechaInic"])), True, "")
     except Exception:
         pass
-    return {"contrato": 1, "empresa": "", "mutual": "", "pmutual": "", "caja": "", "ok": False, "motivo": "multi-contrato sin fecha para desambiguar (se usó 1)"}
+    return _ret({"contrato": 1}, False, "multi-contrato sin fecha para desambiguar (se usó 1)")
 
 OUT_COLS = ["Fecha de proceso","Id empleado","Número de contrato","Id del concepto",
 "Monto del concepto","Afecto","Id de institución","Cotización de jubilación","Días de licencias",
@@ -249,8 +413,10 @@ def detect_header_row(df, **_):
     return 0
 
 def match_struct(hdr):
-    """Detecta columnas estructurales. Prioriza coincidencia EXACTA sobre 'empieza con'."""
-    norms = {i: norm(h) for i, h in enumerate(hdr) if h}
+    """Detecta columnas estructurales. Prioriza coincidencia EXACTA sobre 'empieza con'.
+    Ignora puntuación al borde del nombre (paréntesis/asteriscos/guiones), ej. '( Monto Afecto a
+    Leyes Sociales )' o 'Dias Trab.-'."""
+    norms = {i: norm(h).strip(" ()*.-·:") for i, h in enumerate(hdr) if h}
     out, used = {}, set()
     for exact in (True, False):
         for campo, syns in STRUCT.items():
@@ -282,18 +448,30 @@ def leer_catalogo_rex(path_or_file):
     hr = 0
     for r in range(min(8, len(raw))):
         vals = [norm(x) for x in raw.iloc[r].values]
-        if "concepto" in vals and any("nombre" in v for v in vals): hr = r; break
+        _tiene_id = any(("concepto" in v or "codigo" in v or v == "id") for v in vals)
+        _tiene_nom = any(("nombre" in v or "descripcion" in v or "glosa" in v) for v in vals)
+        if _tiene_id and _tiene_nom: hr = r; break
     hdr = [norm(x) for x in raw.iloc[hr].values]
-    ci = hdr.index("concepto") if "concepto" in hdr else 0
-    ni = next((i for i, v in enumerate(hdr) if "nombre" in v), 2)
+    ncol = len(hdr)
+    def _find(keys, default=None):
+        for i, v in enumerate(hdr):
+            if any(k in v for k in keys): return i
+        return default
+    # ID del concepto: "Concepto" / "Código" / "id"
+    ci = _find(["concepto", "codigo"], None)
+    if ci is None:
+        ci = next((i for i, v in enumerate(hdr) if v == "id"), 0)
+    # Nombre: "Nombre" / "Descripción" / "Glosa"
+    ni = _find(["nombre", "descripcion", "glosa"], None)
     ti = next((i for i, v in enumerate(hdr) if v == "tipo"), None)
     by_id, name_to_id = {}, {}
     for _, row in raw.iloc[hr+1:].iterrows():
-        cid = row[ci]
+        if ci >= ncol: break
+        cid = row.iloc[ci]                                        # acceso posicional (evita KeyError)
         if pd.isna(cid) or not str(cid).strip(): continue
         cid = str(cid).strip()
-        nom = "" if ni is None or pd.isna(row[ni]) else str(row[ni]).strip()
-        tipo = "" if ti is None or pd.isna(row[ti]) else str(row[ti]).strip()
+        nom = "" if (ni is None or ni >= ncol or pd.isna(row.iloc[ni])) else str(row.iloc[ni]).strip()
+        tipo = "" if (ti is None or ti >= ncol or pd.isna(row.iloc[ti])) else str(row.iloc[ti]).strip()
         by_id[cid] = {"nombre": nom, "tipo": tipo, "bloque": tipo_a_bloque(tipo)}
         if nom: name_to_id.setdefault(norm(nom), cid)
     return by_id, name_to_id
@@ -324,6 +502,8 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
     # Algunos libros ya traen los IDs de Rex como encabezado (ej. 'sueldoBase', 'cesAporteSol').
     # Permitimos casar el header directamente contra un ID del catálogo (por nombre normalizado).
     id_norm = {norm(c): c for c in (valid_ids or [])}
+    # Tokens de cada nombre del catálogo, para el match por similitud (último recurso).
+    _cat_tokens = {nm: _tokens(nm) for nm in catalog_names}
     filas = []
     for i, h in enumerate(hdr):
         n = norm(h)
@@ -333,7 +513,10 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
         elif td is not None and i > td: grupo = "aporte"
         else: grupo = "?"
         cid, fuente, conf = None, "SIN MAPEAR", "-"
-        if n in saved and _ok(saved[n]):
+        _caja = sugerir_caja(n, valid_ids)                        # CAJA (CCAF): regla de negocio, gana al catálogo
+        if _caja is not None and _ok(_caja):
+            cid, fuente, conf = _caja, "regla-caja", "revisar"
+        elif n in saved and _ok(saved[n]):
             cid, fuente, conf = saved[n], "guardado", "alta"
         elif n in catalog_names:                                   # el catálogo del cliente manda
             cid, fuente, conf = catalog_names[n], "catálogo", "alta"
@@ -344,8 +527,63 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
             if c == "__SOBREGIRO__": c = "compensaSobre" if grupo == "haber" else "sobregiro_anterior"
             if c == "__ISAPRE_AD__": c = "isapre"
             if _ok(c): cid, fuente, conf = c, "diccionario", "media"
+        if cid is None:                                            # match TOLERANTE (sugerencia a revisar)
+            for bn in base_variantes(n):
+                if bn in saved and _ok(saved[bn]):
+                    cid, fuente, conf = saved[bn], "aprox-guardado", "revisar"; break
+                if bn in catalog_names:
+                    cid, fuente, conf = catalog_names[bn], "aprox-catálogo", "revisar"; break
+                if bn in id_norm:
+                    cid, fuente, conf = id_norm[bn], "aprox-id", "revisar"; break
+                if bn in CONCEPTO:
+                    c = CONCEPTO[bn]
+                    if c == "__SOBREGIRO__": c = "compensaSobre" if grupo == "haber" else "sobregiro_anterior"
+                    if c == "__ISAPRE_AD__": c = "isapre"
+                    if _ok(c): cid, fuente, conf = c, "aprox-diccionario", "revisar"; break
+        if cid is None:                                            # cesantía empleador AGRUPADA -> pseudo que DIVIDE
+            _ce = sugerir_cesantia_empl(n, valid_ids)             # cesAporteEmpl es pseudo: no pasa por _ok
+            if _ce is not None:
+                cid, fuente, conf = _ce, "regla-cesantia", "revisar"
+        if cid is None:                                            # regla legal por palabra clave (APV, FALP, SIS, Ley 21735...)
+            _kw = sugerir_legal_kw(n, valid_ids)                   # MÁS confiable que el texto: va primero
+            if _kw is not None and _ok(_kw):
+                cid, fuente, conf = _kw, "regla-legal", "revisar"
+        if cid is None:                                            # similitud (palabra por palabra, tolera plural/sufijo)
+            _sim = sugerir_similar(n, _cat_tokens)
+            if _sim is not None and _ok(catalog_names[_sim]):
+                cid, fuente, conf = catalog_names[_sim], "similitud", "revisar"
         filas.append({"col": i+1, "header": h, "grupo": grupo, "id_rex": cid, "fuente": fuente, "confianza": conf})
     return filas
+
+# Pseudo-concepto: columna única de "AFC aporte empleador" que el motor DIVIDE en cesAporteSol + cesAporteCi.
+PSEUDO_IDS = {"cesAporteEmpl"}
+
+def dividir_afc(afc, tipo_cont, antiguedad):
+    """Divide el aporte AFC del empleador en (solidario, individual) según tipo de contrato y antigüedad,
+    misma lógica que la Migración Historia LRE (page 5). Devuelve (sol, ci, sin_tipo)."""
+    afc = _num(afc); tc = (tipo_cont or "").strip().upper()
+    if afc <= 0:
+        return 0, 0, (tc == "")
+    ant = antiguedad if isinstance(antiguedad, (int, float)) else None
+    # Solidario
+    if ant is not None and ant > 132:
+        sol = round(afc)                       # indefinido > 11 años: todo va a solidario
+    elif tc in ("O", "F"):
+        sol = round(afc / 3 * 0.2)             # plazo fijo/obra: 3% total, 0.2 solidario
+    elif tc == "I":
+        sol = round(afc / 2.4 * 0.8)           # indefinido: 2.4% total, 0.8 solidario
+    else:
+        sol = 0
+    # Individual (cuenta individual)
+    if tc == "I" and ant is not None and ant <= 132:
+        ci = round(afc / 2.4 * 1.6)
+    elif tc == "I" and ant is not None and ant >= 133:
+        ci = 0
+    elif tc in ("O", "F"):
+        ci = round(afc / 3 * 2.8)
+    else:
+        ci = 0
+    return sol, ci, (tc == "")
 
 def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, config, homolog=None, dotacion=None, tipo_map=None):
     """mapping: {norm(header): id_rex}. Suma columnas del mismo id. Cuadra al peso."""
@@ -355,6 +593,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
     # Tope imponible de salud = tope imponible AFP (mismo techo, ~90 UF). OJO: NO es topeSalud_pesos,
     # que es el 7% del tope (monto máx. de cotización), no la base imponible.
     tope_salud = _num(params_row.get("topeImp_pesos_afp", 0)); sis_pct = _num(params_row.get("sis", 0))
+    tope_ces = _num(params_row.get("topeCes_pesos", 0))
     if homolog:
         mut_id = resolver_inst(mut_id, homolog, {"mu"}) or mut_id
         caja_inst = resolver_inst(caja_inst, homolog, {"ca"}) or caja_inst
@@ -374,7 +613,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if td_i is not None and th_i is not None and th_i < i < td_i: return "desc"
         if td_i is not None and i > td_i: return "aporte"
         return "desc"
-    filas = []; flags = set(); empleados = 0; omitidos = 0; bh = bd = bt = 0; log_contratos = []
+    filas = []; flags = set(); empleados = 0; omitidos = 0; bh = bd = bt = 0; log_contratos = []; log_afc = []; descuadres = []
     if sidx("dias_trab") is None:
         flags.add("El libro no trae 'Días Trabajados': se asumieron 30 días por trabajador — revisar con el consultor.")
     _ETIQ = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja"}
@@ -388,6 +627,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if not rut or rut.lower() == "nan" or not rut[0].isdigit() or "total" in rut.lower(): continue
         # --- contrato/empresa/mutual por RUT (dotación) — primero, para poder OMITIR a quien no esté ---
         ncont_e, emp_e, mut_e, pmut_e, caja_e = ncont, emp_id, mut_id, None, caja_inst
+        tipo_cont_e = ""; antig_e = None                  # para dividir/validar el aporte AFC
         if dotacion:
             fecha_ing = row[sidx("fecha_ingreso")] if sidx("fecha_ingreso") is not None else None
             rc = resolver_contrato(rut, fecha_ing, periodo, dotacion)
@@ -400,6 +640,15 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             mut_e = rc["mutual"] or mut_id
             pmut_e = rc["pmutual"]
             if rc.get("caja"): caja_e = rc["caja"]
+            tipo_cont_e = rc.get("tipoCont", "")
+            _fi = rc.get("fechaInic")
+            if _fi is not None:
+                try:
+                    _y, _m = map(int, str(periodo).split("-")[:2])
+                    _fin = pd.Timestamp(_y, _m, calendar.monthrange(_y, _m)[1]); _fid = pd.to_datetime(_fi)
+                    antig_e = abs((_fin.year - _fid.year) * 12 + (_fin.month - _fid.month))
+                except Exception:
+                    antig_e = None
             if homolog and mut_e:
                 _mr = resolver_inst(mut_e, homolog, {"mu"}); _reg_inst("mu", mut_e, _mr); mut_e = _mr or mut_e
             if homolog and caja_e:
@@ -436,7 +685,9 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         pactado = _num(row[sidx("sueldo_pactado")]) if sidx("sueldo_pactado") is not None else 0
         emp_rows = []
         def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc", p7=0, p8=0):
-            emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, cot, 0, dt,
+            # cot (% de cotización) redondeado a 4 decimales: evita basura de punto flotante en el CSV
+            # (ej. 11.45 que salía 11.450000000000001 tras el ×100).
+            emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, round(_num(cot), 4), 0, dt,
                              "x", emp_e, round(reb), 0, 0, jornada, "", round(init), 1, round(p7), round(p8)]))
         for cid, cols in id_cols.items():
             if cid == "impuesto": continue
@@ -455,6 +706,13 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             elif cid == "cesEmpleado": add(cid, m, afecto=base_ces, inst=idafp, cot=0.6, grp=g)
             elif cid == "mutual": add(cid, m, afecto=base_afp, inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
             elif cid == "sis": add(cid, m, afecto=base_afp, inst=idafp, cot=sis_pct, grp="aporte")
+            # AFC empleador en UNA sola columna → dividir en solidario + cuenta individual (como la LRE)
+            elif cid == "cesAporteEmpl":
+                _sol, _ci, _sin = dividir_afc(m, tipo_cont_e, antig_e)
+                if _sol: add("cesAporteSol", _sol, afecto=base_ces, inst=idafp, grp="aporte", p8=base_afp)
+                if _ci:  add("cesAporteCi",  _ci,  afecto=base_ces, inst=idafp, grp="aporte")
+                if _sin and m > 0:
+                    log_afc.append({"rut": rut, "motivo": "AFC a dividir pero el trabajador no tiene tipo de contrato en la dotación (no se dividió)"})
             # parcial8 (cesAporteSol) = imponible del mes (base del aporte solidario)
             elif cid in ("cesAporteCi", "cesAporteSol"):
                 add(cid, m, afecto=base_ces, inst=idafp, grp="aporte", p8=(base_afp if cid == "cesAporteSol" else 0))
@@ -477,9 +735,17 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         T = next((r[4] for g, r in emp_rows if g == "total"), 0)
         TH = _num(row[sidx("total_haberes")]) if th_i is not None else H
         TD = _num(row[sidx("total_descuentos")]) if td_i is not None else D
+        _dh = round(H - TH); _dd = round(D - TD); _dl = round((H - D) - liq)
         if abs(H - TH) > 2: bh += 1
         if abs(D - TD) > 2: bd += 1
         if abs((H - D) - liq) > 2: bt += 1   # líquido = haberes − descuentos (los aportes no cuentan)
+        if abs(H - TH) > 2 or abs((H - D) - liq) > 2 or (td_i is not None and abs(D - TD) > 2):
+            _nom = str(row[sidx("nombre")]).strip() if (sidx("nombre") is not None and pd.notna(row[sidx("nombre")])) else ""
+            _dias = int(dt) if isinstance(dt, (int, float)) else 0
+            descuadres.append({"rut": rut, "nombre": _nom, "dias_trab": _dias,
+                               "haberes_generado": round(H), "haberes_libro": round(TH), "dif_haberes": _dh,
+                               "liquido_generado": round(H - D), "liquido_libro": round(liq), "dif_liquido": _dl,
+                               "dif_descuentos": (_dd if td_i is not None else None)})
         for g, r in emp_rows:
             if r[3] == "impuesto" or _num(r[4]) != 0 or r[3] == "totalesEmpl":
                 filas.append(r)
@@ -488,7 +754,8 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                 for (cl, raw), res in sorted(inst_seen.items())]
     return filas, {"empleados": empleados, "omitidos": omitidos, "filas": len(filas), "flags": sorted(flags),
                    "descuadre_haberes": bh, "descuadre_descuentos": bd, "descuadre_liquido": bt,
-                   "log_contratos": log_contratos, "log_inst": log_inst,
+                   "descuadres": descuadres,
+                   "log_contratos": log_contratos, "log_inst": log_inst, "log_afc": log_afc,
                    "homolog_vacia": not bool(homolog)}
 
 def validar_cuadratura(df, header_row, struct, filas):
