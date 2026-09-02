@@ -7,7 +7,8 @@ import streamlit as st
 import pandas as pd
 import io, os, json, csv, zipfile
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from libro_engine import (norm, _num, load_grid, detect_header_row, match_struct, classify_and_map,
                           generar_detalle, cargar_homologacion, cargar_dotacion, detectar_periodo,
@@ -21,6 +22,52 @@ except Exception:
     def hero(t, d="", i=""): st.title(t); st.caption(d)
 
 DATA_DIR = "data"
+
+def _descuadres_xlsx(det, meses):
+    """Arma un Excel con formato (bytes) del detalle de descuadres, para enviar al cliente."""
+    AZUL, AZUL_CL, AMBAR_F, GRIS = "1E5591", "EAF2FB", "FFF3CD", "5C6773"
+    cols = list(det[0].keys())
+    wb = Workbook(); ws = wb.active; ws.title = "Descuadres a revisar"
+    _b = Side(style="thin", color="D0D7DE"); bd = Border(left=_b, right=_b, top=_b, bottom=_b)
+    ncol = len(cols); last = get_column_letter(ncol)
+    ws.merge_cells(f"A1:{last}1")
+    c = ws["A1"]; c.value = f"Revisión de cuadratura — Libro de Remuneraciones ({', '.join(meses)})"
+    c.font = Font(name="Arial", size=13, bold=True, color="FFFFFF")
+    c.fill = PatternFill("solid", fgColor=AZUL); c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 26
+    ws.merge_cells(f"A2:{last}3")
+    c = ws["A2"]
+    c.value = ("Estos trabajadores no cuadran al reconstruir el detalle para Rex+. Suele ser porque hay montos que "
+               "vienen sólo en un subtotal, sin desglosar por concepto. Se solicita ITEMIZAR esos haberes/descuentos "
+               "por concepto en el libro y reenviar. 'Dif. = generado − libro'.")
+    c.font = Font(name="Arial", size=9, color=GRIS); c.fill = PatternFill("solid", fgColor=AZUL_CL)
+    c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
+    r0 = 5
+    for j, h in enumerate(cols, start=1):
+        cc = ws.cell(row=r0, column=j, value=h)
+        cc.font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+        cc.fill = PatternFill("solid", fgColor=AZUL); cc.border = bd
+        cc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[r0].height = 24
+    money = '#,##0;(#,##0);-'
+    for i, row in enumerate(det):
+        rr = r0 + 1 + i
+        for j, k in enumerate(cols, start=1):
+            v = row[k]; cc = ws.cell(row=rr, column=j, value=v); cc.border = bd
+            cc.font = Font(name="Arial", size=10)
+            if isinstance(v, (int, float)) and k not in ("Días trab.",):
+                cc.number_format = money; cc.alignment = Alignment(horizontal="right")
+                if k.startswith("Dif"):
+                    cc.font = Font(name="Arial", size=10, bold=True, color="B00020")
+                    cc.fill = PatternFill("solid", fgColor=AMBAR_F)
+            else:
+                cc.alignment = Alignment(horizontal="left", vertical="center", wrap_text=(k == "Qué revisar"))
+    _w = {"Período": 10, "RUT": 13, "Nombre": 30, "Días trab.": 9, "Haberes generado": 15,
+          "Haberes libro": 15, "Dif. haberes": 13, "Dif. líquido": 13, "Dif. descuentos": 14, "Qué revisar": 55}
+    for j, k in enumerate(cols, start=1):
+        ws.column_dimensions[get_column_letter(j)].width = _w.get(k, 14)
+    ws.freeze_panes = f"A{r0+1}"
+    buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 AMBAR = "#FFF3CD"; ROJO = "#F8D7DA"; VERDE = "#D4EDDA"
 _XLMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _ETIQ_CLASIF = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja/CCAF",
@@ -377,9 +424,13 @@ if _dups:
                + ". Revisa que no hayas subido el mismo mes dos veces.")
 
 # Estructurales imprescindibles (sin estas no se puede generar/cuadrar).
-faltan = [k for k in ["rut", "total_haberes", "total_descuentos", "liquido"] if k not in struct]
+faltan = [k for k in ["rut", "total_haberes", "liquido"] if k not in struct]
 if faltan:
     st.error(f"❌ No detecté columnas estructurales en el primer libro: **{', '.join(faltan)}**. Revísalo antes de continuar.")
+# Total Descuentos es deseable pero no bloquea: si no viene, se valida el líquido (haberes − descuentos).
+if "total_descuentos" not in struct:
+    st.warning("⚠️ El libro **no trae 'Total Descuentos'**. Se genera igual y se valida el **líquido** "
+               "(haberes − descuentos); solo no se puede cuadrar la columna de descuentos por separado.")
 # La renta imponible es deseable pero no bloquea: si no viene, se deriva (AFP ÷ tasa o SIS ÷ tasa).
 if "base_afp" not in struct:
     st.warning("⚠️ El libro **no trae la renta imponible** (base AFP). Se **derivará** del monto de AFP (o SIS) ÷ su tasa "
@@ -404,14 +455,18 @@ if _sin_param:
 # ---------- 3. Mapeo ----------
 st.markdown("### 3 · Confirma el mapeo de conceptos")
 st.caption("Cada columna del libro se asocia a un concepto **del catálogo del cliente**. "
-           "El **nombre y el tipo** (haber/descuento/aporte) salen del catálogo. "
-           "En **ámbar** los que faltan por asociar; en **rojo** los que no existen en el catálogo (hay que corregirlos).")
+           "La columna **ID Rex** muestra el concepto elegido como *ID - Nombre* (siempre al día con tu selección). "
+           "En **ámbar** los que faltan por asociar; en **rojo** los que no existen en el catálogo (hay que corregirlos). "
+           "Si una columna **no es un concepto** (ej. *Centro de Trabajo*, *Pluriempleo*), marca **Omitir** y no bloqueará.")
 
 valid_ids = sorted(by_id.keys())
+# Pseudo-conceptos (no salen del catálogo): utilidades del migrador. Se permiten y no bloquean.
+_PSEUDO = {"cesAporteEmpl": "cesAporteEmpl - AFC empleador (dividir en CI + Solidario)"}
 # Opciones del desplegable como "ID - Nombre" (para que al asignar se vea qué es cada ID).
 _disp_id = {cid: f"{cid} - {by_id[cid]['nombre']}" for cid in valid_ids}
+_disp_id.update(_PSEUDO)
 _id_de_disp = {v: k for k, v in _disp_id.items()}   # inverso: "ID - Nombre" -> ID
-_opciones_disp = [_disp_id[cid] for cid in valid_ids]
+_opciones_disp = [_disp_id[cid] for cid in valid_ids] + list(_PSEUDO.values())
 def _id_real(v):
     """Del valor mostrado en el desplegable devuelve el ID (acepta 'ID - Nombre' o el ID pelado)."""
     v = str(v).strip()
@@ -421,14 +476,64 @@ def _info(cid):
     """Datos derivados del catálogo para un ID: nombre, legal/propio, bloque y estado."""
     if not cid:
         return {"nombre": "", "tipo": "LEGAL/PROPIO", "bloque": "", "estado": "🟠 falta asociar"}
+    if cid in _PSEUDO:
+        return {"nombre": "AFC empleador (se divide en CI + Solidario)", "tipo": "—",
+                "bloque": "aporte", "estado": "✅ se divide"}
     if cid in by_id:
         return {"nombre": by_id[cid]["nombre"], "tipo": ("LEGAL" if cid in base_estandar else "PROPIO"),
                 "bloque": by_id[cid]["bloque"] or "—", "estado": "✅ en catálogo"}
     return {"nombre": "—", "tipo": "—", "bloque": "—", "estado": "❌ no está en catálogo"}
 
+# Columnas con AL MENOS UN valor distinto de 0 (en cualquiera de los meses). Las que vienen en 0 en
+# todos los meses no tienen nada que migrar → se pre-marcan "Omitir" para no revisarlas una a una.
+_valor_headers = set()
+for _lb in libros:
+    _d = _lb["df"].iloc[_lb["hr"] + 1:]
+    for _i, _h in enumerate(_lb["hdr"]):
+        if not _h: continue
+        try:
+            if (pd.to_numeric(_d.iloc[:, _i], errors="coerce").fillna(0) != 0).any():
+                _valor_headers.add(norm(_h))
+        except Exception:
+            _valor_headers.add(norm(_h))   # no numérica: por las dudas no la omitimos sola
+
+# Firma de valores por columna (para detectar DUPLICADOS exactos: ej. cesantía empleador repetida en
+# 2 columnas con el mismo monto). Se guarda la primera aparición de cada header.
+_firma = {}
+for _lb in libros:
+    _d = _lb["df"].iloc[_lb["hr"] + 1:]
+    for _i, _h in enumerate(_lb["hdr"]):
+        if not _h or norm(_h) in _firma: continue
+        try:
+            _firma[norm(_h)] = tuple(pd.to_numeric(_d.iloc[:, _i], errors="coerce").fillna(0).round(2).tolist())
+        except Exception:
+            _firma[norm(_h)] = None
+
 # Bloque por posición del libro (respaldo cuando el catálogo no define bloque o el concepto no está asociado).
 _GRUPO_POS = {"haber": "haber", "descuento": "desc", "aporte": "aporte", "?": ""}
+
+def _es_subtotal(h):
+    """Filas de subtotal/total del libro (ej. '* TOTAL HABERES IMPONIBLES *') — no son conceptos:
+    se pre-marcan Omitir aunque traigan monto. Los 'Total Haberes/Descuentos' base ya son estructurales."""
+    s = norm(h).strip(" *·:.-")
+    return s.startswith("total ") or s.startswith("subtotal ") or s.startswith("sub total ")
+
+def _comp_ley21735(h):
+    """Componente específico del aporte Ley 21.735: Capitalización Individual o Expectativas de Vida."""
+    n = norm(h)
+    return "21735" in n and any(k in n for k in ("capitalizacion", "individual", "expectativa", "vida"))
+
+# ¿El libro trae los COMPONENTES de Ley 21.735? Si es así, la columna AGREGADA (el total, sin nombrar
+# componente) es un subtotal y se auto-omite para no duplicar (ej. 'Cotización a cargo del empleador
+# Ley 21735 (H)' = Capitalización + Expectativas de Vida).
+_hay_comp_21735 = any(_comp_ley21735(h) for lb in libros for h in lb["hdr"] if h)
+
+def _es_total_ley21735(h):
+    n = norm(h)
+    return _hay_comp_21735 and "21735" in n and not _comp_ley21735(h)
+
 filas_map = []
+_dup_visto = {}   # (cid, firma) ya mapeado con datos -> para pre-omitir columnas duplicadas idénticas
 for r in propuesta:
     inf = _info(r["id_rex"])
     # Bloque efectivo: del catálogo si lo define; si no (pendiente o Tipo Dato/Valor Guardado), el de la posición.
@@ -437,16 +542,54 @@ for r in propuesta:
     else:
         inf["bloque"] = _GRUPO_POS.get(r["grupo"], "")
     _cid = r["id_rex"]
-    filas_map.append({"Columna del libro": r["header"], "Concepto Rex (nombre)": inf["nombre"],
-                      "Tipo": inf["tipo"], "Bloque": inf["bloque"],
+    _nh = norm(r["header"])
+    # Pre-omitir: en 0 en todos los meses, O es subtotal, O es el AGREGADO de Ley 21.735 (el total,
+    # cuyos componentes ya vienen por separado) — todos aunque traigan monto.
+    _sin_valor = (_nh not in _valor_headers) or _es_subtotal(r["header"]) or _es_total_ley21735(r["header"])
+    # Pre-omitir DUPLICADO exacto: otra columna con el MISMO concepto y valores idénticos ya fue mapeada
+    # (ej. cesantía empleador repetida en 2 columnas). Se conserva la 1ª y se omite la copia -> no duplica.
+    _es_dup = False
+    if _cid and not _sin_valor:
+        _fma = _firma.get(_nh)
+        if _fma is not None:
+            _clave = (_cid, _fma)
+            if _clave in _dup_visto:
+                _sin_valor = True; _es_dup = True
+            else:
+                _dup_visto[_clave] = True
+    # "Sugerencia": describe lo que PROPUSO el artefacto (no cambia si el consultor edita el ID),
+    # por eso no queda "pegada" ni miente. La validación real (falta asociar/inválido) va abajo, viva.
+    if _es_dup:
+        _sug = "duplicado → omitir"
+    elif _es_total_ley21735(r["header"]):
+        _sug = "total Ley 21735 → omitir"
+    elif _es_subtotal(r["header"]):
+        _sug = "subtotal → omitir"
+    elif not _cid:
+        _sug = "— elige del catálogo"
+    elif r.get("confianza") == "revisar":
+        _f = r.get("fuente")
+        _sug = ("🔎 similitud — revisar bien" if _f == "similitud"
+                else "🔎 regla legal — revisar" if _f == "regla-legal"
+                else "🔎 regla caja — revisar" if _f == "regla-caja"
+                else "🔎 cesantía (se divide) — revisar" if _f == "regla-cesantia"
+                else "🔎 sugerido — revisar")
+    else:
+        _sug = "✅ del catálogo"
+    filas_map.append({"Columna del libro": r["header"], "Bloque": inf["bloque"],
                       "ID Rex": (_disp_id.get(_cid, _cid) if _cid else ""),
-                      "Estado": inf["estado"]})
+                      "Omitir": bool(_sin_valor), "Sugerencia": _sug})
+# Ordena: primero las que hay que revisar (con datos), al fondo las pre-omitidas (en 0).
+filas_map.sort(key=lambda d: d["Omitir"])
 map_df = pd.DataFrame(filas_map)
 
-tot = len(map_df)
-auto0 = int((map_df["ID Rex"].astype(str).str.len() > 0).sum())
+# Métricas EN VIVO: se rellenan DESPUÉS del editor con lo que quedó editado (se actualizan al asignar/omitir).
 m1, m2, m3 = st.columns(3)
-m1.metric("Conceptos", tot); m2.metric("Asociados", auto0); m3.metric("Por asociar", tot - auto0)
+_ph1, _ph2, _ph3 = m1.empty(), m2.empty(), m3.empty()
+_pre_omit = int(map_df["Omitir"].sum())
+if _pre_omit:
+    st.caption(f"Se pre-marcaron **{_pre_omit}** columnas que vienen **en 0 en todos los meses** como *Omitir* "
+               "(al final de la tabla). Revisa arriba las que traen datos; si alguna en 0 debe ir igual, desmárcala.")
 
 # posición del libro por columna (para detectar conflictos y como respaldo del bloque)
 pos_by_header = {norm(r["header"]): _GRUPO_POS.get(r["grupo"], "") for r in propuesta}
@@ -455,9 +598,6 @@ editor = st.data_editor(
     map_df, use_container_width=True, hide_index=True, key="mapeo", height=430,
     column_config={
         "Columna del libro": st.column_config.TextColumn(disabled=True),
-        "Concepto Rex (ID - nombre)": st.column_config.TextColumn(disabled=True, width="large",
-                    help="ID y nombre del concepto en el catálogo del cliente."),
-        "Tipo": st.column_config.TextColumn("Legal/Propio", disabled=True, width="small"),
         "Bloque": st.column_config.SelectboxColumn("Bloque", options=["haber", "desc", "aporte"], required=False,
                     width="small",
                     help="Cómo se trata en la migración. Por defecto sale del catálogo (o de la posición del "
@@ -465,17 +605,35 @@ editor = st.data_editor(
         "ID Rex": st.column_config.SelectboxColumn("ID Rex (elige del catálogo)", options=_opciones_disp, required=False,
                     width="large",
                     help="Elige el concepto del catálogo del cliente (ID - Nombre). Escribe para filtrar."),
-        "Estado": st.column_config.TextColumn(disabled=True, width="medium"),
+        "Omitir": st.column_config.CheckboxColumn("Omitir", width="small",
+                    help="Marca las columnas que NO son conceptos (ej. Centro de Trabajo, Pluriempleo). "
+                         "No se mapean, no bloquean y no entran al archivo."),
+        "Sugerencia": st.column_config.TextColumn("Sugerencia", disabled=True, width="medium",
+                    help="Lo que propuso el artefacto para esta columna (no cambia si editas el ID). "
+                         "'🔎 revisar' = sugerencia por parecido, confírmala. Lo que aún falta o está mal "
+                         "se avisa debajo de la tabla."),
     })
 
-mapping = {norm(r["Columna del libro"]): _id_real(r["ID Rex"]) for _, r in editor.iterrows() if str(r["ID Rex"]).strip()}
+def _omitida(r): return bool(r.get("Omitir", False))
+
+# Rellena las métricas EN VIVO con lo que quedó en el editor (se actualizan al asignar u omitir).
+_e_omit = editor["Omitir"].astype(bool)
+_e_hasid = editor["ID Rex"].astype(str).str.strip() != ""
+_ph1.metric("Con datos a mapear", int((~_e_omit).sum()))
+_ph2.metric("Asociados", int((_e_hasid & ~_e_omit).sum()))
+_ph3.metric("Por asociar", int((~_e_hasid & ~_e_omit).sum()))
+
+mapping = {norm(r["Columna del libro"]): _id_real(r["ID Rex"])
+           for _, r in editor.iterrows() if str(r["ID Rex"]).strip() and not _omitida(r)}
 # tipo_map = el bloque que quedó en la tabla (catálogo, posición o el override del implementador)
 tipo_map = {}
 for _, r in editor.iterrows():
+    if _omitida(r): continue
     cid = _id_real(r["ID Rex"]); bl = str(r["Bloque"]).strip()
     if cid and bl in ("haber", "desc", "aporte"): tipo_map[cid] = bl
-invalidos = sorted(v for v in set(mapping.values()) if v not in by_id)
-pend_df = editor[editor["ID Rex"].astype(str).str.strip() == ""][["Columna del libro", "Bloque"]]
+invalidos = sorted(v for v in set(mapping.values()) if v not in by_id and v not in _PSEUDO)
+# Pendientes: sin ID y NO omitidas (las omitidas no bloquean).
+pend_df = editor[(editor["ID Rex"].astype(str).str.strip() == "") & (~editor["Omitir"].astype(bool))][["Columna del libro", "Bloque"]]
 
 # Aviso GENERAL (no atado a ningún concepto puntual): dónde el catálogo y el libro difieren en el bloque.
 conflictos = []
@@ -488,7 +646,8 @@ for _, r in editor.iterrows():
             conflictos.append((r["Columna del libro"], pos, by_id[cid]["bloque"]))
 
 if len(pend_df):
-    st.warning(f"🟠 Faltan **{len(pend_df)}** concepto(s) por asociar — elige su ID del catálogo arriba:")
+    st.warning(f"🟠 Faltan **{len(pend_df)}** columna(s) por asociar — elige su ID del catálogo arriba "
+               "(o marca **Omitir** si no es un concepto):")
     st.dataframe(pend_df.style.set_properties(**{"background-color": AMBAR}),
                  hide_index=True, use_container_width=True)
 elif not invalidos:
@@ -504,6 +663,25 @@ if conflictos:
                    "o ajusta la columna **Bloque** arriba.")
         st.dataframe(pd.DataFrame(conflictos, columns=["Columna del libro", "Bloque en el libro", "Bloque en el catálogo"]),
                      hide_index=True, use_container_width=True)
+
+# Aviso de DUPLICADOS: varias columnas (no omitidas) que caen en el MISMO ID Rex. El motor las SUMA;
+# a veces es correcto (el libro parte un concepto en varias columnas), pero es el punto donde un match
+# tolerante podría duplicar un haber. Se lista para que el consultor confirme u omita alguna.
+_por_id = {}
+for _, r in editor.iterrows():
+    if _omitida(r): continue
+    cid = _id_real(r["ID Rex"])
+    if cid and cid not in _PSEUDO:
+        _por_id.setdefault(cid, []).append(str(r["Columna del libro"]))
+_dups = {cid: cols for cid, cols in _por_id.items() if len(cols) > 1}
+if _dups:
+    with st.expander(f"⚠️ {len(_dups)} concepto(s) con **varias columnas al mismo ID** — el motor las suma, confirma que corresponde"):
+        st.caption("Si dos columnas son partes del mismo concepto (ej. una imponible y otra no), sumarlas está bien. "
+                   "Si en realidad son conceptos distintos, corrige el **ID Rex** de una o márcala **Omitir** para no duplicar.")
+        _rows = []
+        for cid, cols in _dups.items():
+            _rows.append({"ID Rex": _disp_id.get(cid, cid), "Columnas que se suman": "  +  ".join(cols)})
+        st.dataframe(pd.DataFrame(_rows), hide_index=True, use_container_width=True)
 
 # ---------- 4. Generar ----------
 st.markdown("### 4 · Generar y validar")
@@ -542,7 +720,38 @@ if st.button(_btn, type="primary", disabled=not listo, use_container_width=True)
                                for r in resultados]), hide_index=True, use_container_width=True)
     _tot_desc = sum(_desc(r["res"]) for r in resultados)
     if _tot_desc:
-        st.error(f"⚠️ Hay **{_tot_desc}** descuadre(s) en total — revisa el resumen por mes antes de cargar a Rex.")
+        st.error(f"⚠️ Hay **{_tot_desc}** descuadre(s) en total — revisa el detalle antes de cargar a Rex.")
+        # Detalle POR TRABAJADOR: qué RUT descuadra y por cuánto (para ubicar el concepto que falta o sobra).
+        def _motivo(d):
+            dh, dl = d["dif_haberes"], d["dif_liquido"]
+            if d.get("dias_trab") == 0:
+                return "Trabajador con LICENCIA: el pago/subsidio no viene desglosado por concepto."
+            if dh < -2:
+                return "Faltan HABERES: hay monto sin desglosar por concepto (viene solo en un subtotal) o un concepto sin asociar."
+            if dh > 2:
+                return "Sobran HABERES: un concepto se sumó de más (duplicado o mal clasificado)."
+            if abs(dl) > 2:
+                return "Haberes cuadran pero el LÍQUIDO no: falta o sobra un descuento (revisar finiquito/ajuste)."
+            return "Revisar."
+        _det = [{"Período": r["periodo"], "RUT": d["rut"], "Nombre": d.get("nombre", ""),
+                 "Días trab.": d.get("dias_trab", ""),
+                 "Haberes generado": d["haberes_generado"], "Haberes libro": d["haberes_libro"],
+                 "Dif. haberes": d["dif_haberes"], "Dif. líquido": d["dif_liquido"],
+                 **({"Dif. descuentos": d["dif_descuentos"]} if d.get("dif_descuentos") is not None else {}),
+                 "Qué revisar": _motivo(d)}
+                for r in resultados for d in r["res"].get("descuadres", [])]
+        if _det:
+            with st.expander(f"🔎 Ver los {len(_det)} trabajador(es) que descuadran", expanded=True):
+                st.caption("**Dif. = generado − libro.** Positivo = el artefacto suma de más (concepto duplicado o "
+                           "mal clasificado); negativo = falta un haber por asociar/desglosar. Filtra el libro por ese "
+                           "RUT y compara con los conceptos que mapeaste.")
+                st.dataframe(pd.DataFrame(_det).style.set_properties(**{"background-color": AMBAR}),
+                             hide_index=True, use_container_width=True)
+                # Descargable para enviar al cliente (Excel con formato)
+                st.download_button("⬇️ Descargar descuadres (.xlsx) para el cliente",
+                                   _descuadres_xlsx(_det, meses), file_name=f"descuadres_libro_{'_'.join(meses)}.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   help="Reporte con formato: RUT, nombre, diferencia y qué revisar. Listo para enviar al cliente.")
 
     # --- RUT omitidos (todos los meses) ---
     _omit = [{"Período": r["periodo"], "RUT": lc.get("rut"), "Motivo": lc.get("motivo")}
@@ -560,6 +769,15 @@ if st.button(_btn, type="primary", disabled=not listo, use_container_width=True)
             st.dataframe(pd.DataFrame(_sin).drop_duplicates(), hide_index=True, use_container_width=True)
             st.warning("🟠 Salieron con el texto crudo del libro. Agrégalas en **📋 Tablas de referencia** "
                        "(arriba) y vuelve a generar.")
+
+    # --- Validación del aporte de cesantía (AFC) ---
+    _afc = [{"Período": r["periodo"], "RUT": a["rut"], "Detalle": a["motivo"]}
+            for r in resultados for a in r["res"].get("log_afc", [])]
+    if _afc:
+        with st.expander(f"🟠 Aporte de cesantía (AFC): {len(_afc)} caso(s) a revisar", expanded=True):
+            st.caption("Alerta **informativa** (no bloquea): al dividir el AFC del empleador faltó el **tipo de "
+                       "contrato** en la dotación, así que no se pudo repartir en CI + Solidario para esos RUT.")
+            st.dataframe(pd.DataFrame(_afc), hide_index=True, use_container_width=True)
 
     # --- Avisos (unión de flags de todos los meses) ---
     for f in sorted({fl for r in resultados for fl in r["res"]["flags"]}):
