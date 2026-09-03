@@ -594,6 +594,153 @@ def corregir_ubicacion(codigo_comuna, region_escrita, ciudad_escrita):
 
 
 # ─────────────────────────────────────────────
+#  REGLAS DE NORMALIZACIÓN (campos de contrato / previsión)
+# ─────────────────────────────────────────────
+
+# Gentilicio → nombre de país. Las claves se normalizan (minúsculas, sin tildes)
+# al construir el índice, así que basta con agregar la fila nueva aquí.
+NACIONALIDAD_MAPEO = {
+    "peruana":     "Perú",
+    "peruano":     "Perú",
+    "uruguaya":    "Uruguay",
+    "uruguayo":    "Uruguay",
+    "chilena":     "Chile",
+    "chileno":     "Chile",
+    "colombiana":  "Colombia",
+    "colombiano":  "Colombia",
+    "venezolana":  "Venezuela",
+    "venezolano":  "Venezuela",
+}
+_INDICE_NACIONALIDAD = {_normalizar_texto(k): v for k, v in NACIONALIDAD_MAPEO.items()}
+
+NACION_POR_DEFECTO = "Chile"
+
+# Bancos que llegan con nombre comercial o de la cooperativa y hay que mapear.
+BANCO_MAPEO = {
+    "NOVA":                                 "BCI",
+    "COOPERATIVA PERSONAL U. DE CHILE LTDA": "COOPEUCH",
+}
+_INDICE_BANCO = {_normalizar_texto(k): v for k, v in BANCO_MAPEO.items()}
+BANCO_SIN_DEFINIR = "NOBANCO"
+
+# Umbral de jornada parcial: <= 30 horas semanales es jornada parcial.
+JORNADA_PARCIAL_MAX_HORAS = 30
+
+# Deja en True para imprimir el valor crudo vs. el convertido del monto Isapre.
+DEBUG_MONTO_ISAPRE = True
+
+
+def _solo_ceros(valor) -> bool:
+    """True si el valor son puros ceros: '0', '00', '0.0', '0,00', '000-0'."""
+    if _vacio(valor):
+        return False
+    s = re.sub(r"[.,\-\s]", "", str(valor).strip())
+    return s != "" and set(s) == {"0"}
+
+
+def _buscar_columna(df, *candidatos):
+    """Devuelve el nombre real de la primera columna que calce (sin tildes/case)."""
+    normalizadas = {_normalizar_texto(c): c for c in df.columns}
+    for cand in candidatos:
+        real = normalizadas.get(_normalizar_texto(cand))
+        if real is not None:
+            return real
+    return None
+
+
+def _completar_vacios(df, col, valor) -> int:
+    """Rellena las celdas vacías de `col` con `valor`. Devuelve cuántas cambió."""
+    df[col] = df[col].astype("object")
+    mask = df[col].apply(_vacio).astype(bool)
+    df.loc[mask, col] = valor
+    return int(mask.sum())
+
+
+# ───── Regla 1: Apellido materno ─────
+def limpiar_apellido_materno(valor):
+    """'.' o ceros ('0', '00', ...) → campo vacío."""
+    if _vacio(valor):
+        return valor
+    s = str(valor).strip()
+    if s == "." or _solo_ceros(s):
+        return ""
+    return valor
+
+
+# ───── Regla 2: Id nación ─────
+def normalizar_nacionalidad(valor):
+    """Gentilicio → país (sin tildes, case-insensitive). Vacío → 'Chile'."""
+    if _vacio(valor):
+        return NACION_POR_DEFECTO
+    pais = _INDICE_NACIONALIDAD.get(_normalizar_texto(valor))
+    return pais if pais else str(valor).strip()
+
+
+# ───── Regla 3: ¿Es expatriado? ─────
+def calcular_expatriado(id_nacion):
+    """Se evalúa DESPUÉS de normalizar la nación: Chile → 'N', el resto → 'T'."""
+    return "N" if _normalizar_texto(id_nacion) == _normalizar_texto(NACION_POR_DEFECTO) else "T"
+
+
+# ───── Regla 6: Banco ─────
+def normalizar_banco(valor):
+    """Mapea bancos conocidos; vacío o en ceros → 'NOBANCO'."""
+    if _vacio(valor) or _solo_ceros(valor):
+        return BANCO_SIN_DEFINIR
+    return _INDICE_BANCO.get(_normalizar_texto(valor), str(valor).strip())
+
+
+# ───── Reglas 7 y 8: Institución de salud ─────
+def es_fonasa(valor) -> bool:
+    """True si la institución de salud es Fonasa (ignora case, tildes y prefijos)."""
+    return _normalizar_aseguradora(valor) == "fonasa"
+
+
+# ───── Regla 9: Monto cotizado Isapre ─────
+def parsear_monto(valor):
+    """Convierte el monto a número aceptando coma decimal.
+
+    El cliente manda el monto con coma ('4,5') y en el Excel en formato General
+    queda como texto/entero, perdiendo el decimal. Se toma el valor crudo de la
+    celda (antes de cualquier cast) y se fuerza el parseo cambiando ',' por '.'.
+    Devuelve (valor_convertido, hubo_cambio).
+    """
+    if _vacio(valor):
+        return valor, False
+
+    crudo = str(valor).strip()
+    limpio = re.sub(r"[^\d,.\-]", "", crudo)
+
+    # Si trae ambos separadores, el último es el decimal y el otro es de miles.
+    if "," in limpio and "." in limpio:
+        if limpio.rfind(",") > limpio.rfind("."):
+            limpio = limpio.replace(".", "").replace(",", ".")
+        else:
+            limpio = limpio.replace(",", "")
+    elif "," in limpio:
+        limpio = limpio.replace(",", ".")
+
+    try:
+        numero = float(limpio)
+    except ValueError:
+        return valor, False
+
+    convertido = int(numero) if numero == int(numero) else numero
+    return convertido, str(convertido) != crudo
+
+
+# ───── Regla 10: ¿Jornada parcial? ─────
+def jornada_parcial_por_horas(horas):
+    """<= JORNADA_PARCIAL_MAX_HORAS → 'S'; > → 'N'. Sin horas → None (no se toca)."""
+    if _vacio(horas):
+        return None
+    numero, _ = parsear_monto(horas)
+    if not isinstance(numero, (int, float)):
+        return None
+    return "S" if float(numero) <= JORNADA_PARCIAL_MAX_HORAS else "N"
+
+
+# ─────────────────────────────────────────────
 #  PROCESAMIENTO PRINCIPAL
 # ─────────────────────────────────────────────
 
@@ -646,6 +793,7 @@ def procesar_archivo(uploaded_file):
         "tipos_contrato_normalizados": 0,
         "monedas_normalizadas": 0,
         "valores_defecto_completados": 0,
+        "reglas_normalizacion":       0,
     }
 
     # Lista de correcciones de ubicación hechas (para el reporte)
@@ -760,6 +908,106 @@ def procesar_archivo(uploaded_file):
         )
         correcciones["salud_normalizadas"] = int((antes.fillna("") != df[col_salud].fillna("")).sum())
 
+    # ───── Reglas de normalización de contrato / previsión ─────
+    # Se aplican en el orden pedido: la nación se normaliza antes de calcular
+    # expatriado, y el monto Isapre se parsea antes de los overrides de Fonasa.
+    log_monto_isapre = []
+
+    # 1) Apellido materno: '.' o ceros → vacío
+    col = _buscar_columna(df, "Apellido materno")
+    if col:
+        antes = df[col].copy()
+        df[col] = df[col].astype("object").apply(limpiar_apellido_materno)
+        correcciones["reglas_normalizacion"] += int((antes.fillna("") != df[col].fillna("")).sum())
+
+    # 2) Id nación: gentilicio → país, y vacío → Chile
+    col_nacion = _buscar_columna(df, "Id nación", "Id nacion")
+    if col_nacion:
+        antes = df[col_nacion].copy()
+        df[col_nacion] = df[col_nacion].astype("object").apply(normalizar_nacionalidad)
+        correcciones["reglas_normalizacion"] += int((antes.fillna("") != df[col_nacion].fillna("")).sum())
+
+    # 3) ¿Es expatriado? — se calcula con la nación ya normalizada
+    col_exp = _buscar_columna(df, "¿Es expatriado?")
+    if col_exp and col_nacion:
+        antes = df[col_exp].copy()
+        df[col_exp] = df[col_nacion].apply(calcular_expatriado)
+        correcciones["reglas_normalizacion"] += int((antes.fillna("") != df[col_exp].fillna("")).sum())
+
+    # 4-5, 13-14) Vacíos con valor por defecto
+    DEFAULTS_REGLAS = [
+        (("Estado de jubilación",),          "0"),
+        (("Sistema de pensiones",),          "N"),
+        (("¿Cotiza seguro de cesantía?",),   "S"),
+        (("Modalidad del contrato",),        "C"),
+    ]
+    for nombres, valor_defecto in DEFAULTS_REGLAS:
+        col = _buscar_columna(df, *nombres)
+        if col:
+            correcciones["reglas_normalizacion"] += _completar_vacios(df, col, valor_defecto)
+
+    # 6) Banco: mapeo de los que faltan identificar
+    col = _buscar_columna(df, "Id banco", "Banco")
+    if col:
+        antes = df[col].copy()
+        df[col] = df[col].astype("object").apply(normalizar_banco)
+        correcciones["reglas_normalizacion"] += int((antes.fillna("") != df[col].fillna("")).sum())
+
+    # 9) Monto Isapre: parseo forzando la coma decimal (antes de los overrides)
+    col_monto_pesos = _buscar_columna(df, "Monto cotizado en la Isapre", "Monto cotizado en Isapre")
+    col_monto_uf    = _buscar_columna(df, "Monto cotizado en la Isapre en UF", "Monto cotizado en Isapre en UF")
+    for col in [c for c in (col_monto_pesos, col_monto_uf) if c]:
+        nuevos = []
+        for crudo in df[col]:
+            convertido, cambio = parsear_monto(crudo)
+            nuevos.append(convertido)
+            if cambio:
+                correcciones["reglas_normalizacion"] += 1
+            if DEBUG_MONTO_ISAPRE and not _vacio(crudo):
+                linea = f"[{col}] crudo={crudo!r} ({type(crudo).__name__}) → convertido={convertido!r} ({type(convertido).__name__})"
+                print(linea)
+                log_monto_isapre.append(linea)
+        df[col] = pd.Series(nuevos, index=df.index, dtype="object")
+
+    # 7-8) Si la institución de salud es Fonasa: monto en pesos → 0, monto UF → '%'
+    if col_salud:
+        mask_fonasa = df[col_salud].apply(es_fonasa).astype(bool)
+        for col, valor_fonasa in ((col_monto_pesos, 0), (col_monto_uf, "%")):
+            if col:
+                df[col] = df[col].astype("object")
+                distintos = mask_fonasa & (df[col] != valor_fonasa)
+                df.loc[mask_fonasa, col] = valor_fonasa
+                correcciones["reglas_normalizacion"] += int(distintos.sum())
+
+    # 10) ¿Jornada parcial? vacío → según horas de trabajo semanales
+    col_jornada = _buscar_columna(df, "¿Jornada parcial?")
+    col_horas   = _buscar_columna(df, "Horas de trabajo semanales")
+    if col_jornada and col_horas:
+        df[col_jornada] = df[col_jornada].astype("object")
+        for idx in df.index:
+            if not _vacio(df.at[idx, col_jornada]):
+                continue
+            valor = jornada_parcial_por_horas(df.at[idx, col_horas])
+            if valor is not None:
+                df.at[idx, col_jornada] = valor
+                correcciones["reglas_normalizacion"] += 1
+
+    # 11-12) Fechas que se completan con la fecha de inicio del contrato
+    col_inicio = _buscar_columna(df, "Fecha de inicio del contrato")
+    if col_inicio:
+        for nombres in (("Fecha de inicio de vacaciones",),
+                        ("Fecha de incorporación al seguro de cesantía",)):
+            col = _buscar_columna(df, *nombres)
+            if not col:
+                continue
+            df[col] = df[col].astype("object")
+            mask = df[col].apply(_vacio).astype(bool) & ~df[col_inicio].apply(_vacio).astype(bool)
+            df.loc[mask, col] = df.loc[mask, col_inicio]
+            correcciones["reglas_normalizacion"] += int(mask.sum())
+
+    if DEBUG_MONTO_ISAPRE and log_monto_isapre:
+        st.session_state["debug_monto_isapre"] = log_monto_isapre
+
     # ───── Emails ─────
     for campo in campos_email:
         if campo in df.columns:
@@ -812,6 +1060,14 @@ def procesar_archivo(uploaded_file):
             if _vacio(valor):
                 # Los emails y teléfonos ya se completaron, no reportar como vacíos
                 if campo in campos_email or campo in campos_telefono:
+                    continue
+                if campo == "Tipo del contrato":
+                    # No se rellena: la decisión (Indefinido vs. Plazo Fijo) es
+                    # del cliente. Solo se deja como observación en el reporte.
+                    errores_fila.append(
+                        "OBSERVACIÓN: Tipo del contrato vacío — requiere definición del "
+                        "cliente (Indefinido / Plazo Fijo). No se completa automáticamente."
+                    )
                     continue
                 campos_vacios.append(campo)
                 continue
@@ -999,9 +1255,10 @@ if archivo:
             c1.metric("🗺️ Regiones corregidas",         correcciones["regiones_corregidas"])
             c2.metric("🏙️ Ciudades corregidas",         correcciones["ciudades_corregidas"])
 
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             c1.metric("🏦 AFP normalizadas",            correcciones["afp_normalizadas"])
             c2.metric("🏥 Salud normalizadas",          correcciones["salud_normalizadas"])
+            c3.metric("⚙️ Reglas aplicadas",            correcciones["reglas_normalizacion"])
 
             if correcciones["valores_defecto_completados"] > 0:
                 st.info(
