@@ -623,6 +623,27 @@ BANCO_MAPEO = {
 _INDICE_BANCO = {_normalizar_texto(k): v for k, v in BANCO_MAPEO.items()}
 BANCO_SIN_DEFINIR = "NOBANCO"
 
+# Columnas que tocan las 14 reglas de normalización, con sus alias aceptados.
+# Se usa para el diagnóstico agregado: ocupación y columnas ausentes.
+COLUMNAS_REGLAS = [
+    ("1",     ("Apellido materno",)),
+    ("2",     ("Id nación", "Id nacion")),
+    ("3",     ("¿Es expatriado?",)),
+    ("4",     ("Estado de jubilación",)),
+    ("5",     ("Sistema de pensiones",)),
+    ("6",     ("Id banco", "Banco")),
+    ("7",     ("Monto cotizado en la Isapre", "Monto cotizado en Isapre")),
+    ("8",     ("Monto cotizado en la Isapre en UF", "Monto cotizado en Isapre en UF")),
+    ("10",    ("¿Jornada parcial?",)),
+    ("10-hrs",("Horas de trabajo semanales",)),
+    ("11",    ("Fecha de inicio de vacaciones",)),
+    ("12",    ("Fecha de incorporación al seguro de cesantía",)),
+    ("13",    ("¿Cotiza seguro de cesantía?",)),
+    ("14",    ("Modalidad del contrato",)),
+    ("ref",   ("Fecha de inicio del contrato",)),
+    ("salud", ("ID INSTITUCION DE SALUD", "ID INSTITUCIÓN DE SALUD")),
+]
+
 # Umbral de jornada parcial: <= 30 horas semanales es jornada parcial.
 JORNADA_PARCIAL_MAX_HORAS = 30
 
@@ -1096,6 +1117,30 @@ def procesar_archivo(uploaded_file):
         m["cambios_reales"] for m in detalle_reglas.values()
     )
 
+    # ── Diagnóstico agregado (solo conteos, sin datos personales) ──
+    diagnostico = {
+        "filas":            int(len(df)),
+        "columnas":         int(len(df.columns)),
+        "filas_originales": int(total_original),
+        "filas_eliminadas": int(filas_eliminadas),
+        "ocupacion":        [],
+        "ausentes":         [],
+    }
+    for _num, _cands in COLUMNAS_REGLAS:
+        _col = _buscar_columna(df, *_cands)
+        if _col is None:
+            diagnostico["ausentes"].append(f"{_cands[0]} (regla {_num})")
+            continue
+        _serie = df_antes_reglas[_col] if _col in df_antes_reglas.columns else df[_col]
+        _canonica = _serie.apply(_canon)
+        diagnostico["ocupacion"].append({
+            "regla":      _num,
+            "columna":    _col,
+            "con_valor":  int((_canonica != "").sum()),
+            "vacias":     int((_canonica == "").sum()),
+        })
+
+    st.session_state["diagnostico_maestro"] = diagnostico
     st.session_state["detalle_reglas"] = detalle_reglas
     st.session_state["verificacion_fonasa"] = verificacion_fonasa
 
@@ -1104,8 +1149,9 @@ def procesar_archivo(uploaded_file):
         for _col, _resumen in log_monto_isapre.items():
             print(f"[DEBUG_MONTO_ISAPRE] {_col}:")
             for _formato, _caso in sorted(_resumen.items()):
+                # Sin Id empleado: el log del servidor puede quedar en disco
                 _ej = "; ".join(
-                    f"fila {e['fila']} [{e['empleado']}] {e['crudo']} → {e['convertido']}"
+                    f"fila {e['fila']} {e['crudo']} → {e['convertido']}"
                     for e in _caso["ejemplos"]
                 )
                 print(f"    {_formato:12s} {_caso['total']:6d}  ej: {_ej}")
@@ -1412,6 +1458,60 @@ if archivo:
                             ]),
                             use_container_width=True, hide_index=True,
                         )
+
+            # Diagnóstico agregado del maestro (solo conteos)
+            diag = st.session_state.get("diagnostico_maestro") or {}
+            if diag:
+                with st.expander("🧪 Diagnóstico agregado del maestro", expanded=True):
+                    d1, d2, d3 = st.columns(3)
+                    d1.metric("Filas procesadas", diag["filas"])
+                    d2.metric("Columnas del Excel", diag["columnas"])
+                    d3.metric("Filas descartadas", diag["filas_eliminadas"])
+
+                    if diag["ausentes"]:
+                        st.warning(
+                            "Columnas que NO vienen en el archivo (su regla no se aplicó): "
+                            + " · ".join(diag["ausentes"])
+                        )
+                    else:
+                        st.success("Todas las columnas de las 14 reglas vienen en el archivo.")
+
+                    st.markdown("**Ocupación por columna (antes de aplicar las reglas)**")
+                    ocup = pd.DataFrame(diag["ocupacion"])
+                    if not ocup.empty:
+                        detalle_m = st.session_state.get("detalle_reglas") or {}
+                        cambios_por_col = {
+                            m_col: m["cambios_reales"]
+                            for k, m in detalle_m.items()
+                            for m_col in [k.split(". ", 1)[-1].rsplit(" (", 1)[0]]
+                        }
+                        ocup["Cambios reales"] = ocup["columna"].map(cambios_por_col).fillna(0).astype(int)
+                        ocup = ocup.rename(columns={
+                            "regla": "Regla", "columna": "Columna",
+                            "con_valor": "Con valor", "vacias": "Vacías",
+                        })
+                        st.dataframe(ocup, use_container_width=True, hide_index=True)
+
+                    # Texto plano copiable, sin datos personales
+                    lineas = [
+                        f"Filas procesadas: {diag['filas']} (originales {diag['filas_originales']}, "
+                        f"descartadas {diag['filas_eliminadas']})",
+                        f"Columnas del Excel: {diag['columnas']}",
+                        f"Columnas ausentes: {', '.join(diag['ausentes']) or 'ninguna'}",
+                        "",
+                        f"{'COLUMNA':52s} {'CON VALOR':>10s} {'VACIAS':>8s} {'CAMBIOS':>8s}",
+                    ]
+                    for _fila in diag["ocupacion"]:
+                        _camb = int(ocup.loc[ocup["Columna"] == _fila["columna"], "Cambios reales"].iloc[0]) \
+                                if not ocup.empty else 0
+                        lineas.append(
+                            f"{_fila['columna'][:52]:52s} {_fila['con_valor']:10d} "
+                            f"{_fila['vacias']:8d} {_camb:8d}"
+                        )
+                    total_cambios = sum(m["cambios_reales"] for m in (st.session_state.get("detalle_reglas") or {}).values())
+                    lineas += ["", f"TOTAL cambios reales: {total_cambios}"]
+                    st.caption("Resumen copiable (solo conteos, sin datos personales):")
+                    st.code("\n".join(lineas), language="text")
 
             # Verificación post-proceso de las reglas 7 y 8 (Fonasa)
             verif = st.session_state.get("verificacion_fonasa") or {}
