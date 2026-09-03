@@ -594,6 +594,230 @@ def corregir_ubicacion(codigo_comuna, region_escrita, ciudad_escrita):
 
 
 # ─────────────────────────────────────────────
+#  REGLAS DE NORMALIZACIÓN (campos de contrato / previsión)
+# ─────────────────────────────────────────────
+
+# Gentilicio → nombre de país. Las claves se normalizan (minúsculas, sin tildes)
+# al construir el índice, así que basta con agregar la fila nueva aquí.
+NACIONALIDAD_MAPEO = {
+    "peruana":     "Perú",
+    "peruano":     "Perú",
+    "uruguaya":    "Uruguay",
+    "uruguayo":    "Uruguay",
+    "chilena":     "Chile",
+    "chileno":     "Chile",
+    "colombiana":  "Colombia",
+    "colombiano":  "Colombia",
+    "venezolana":  "Venezuela",
+    "venezolano":  "Venezuela",
+}
+_INDICE_NACIONALIDAD = {_normalizar_texto(k): v for k, v in NACIONALIDAD_MAPEO.items()}
+
+NACION_POR_DEFECTO = "Chile"
+
+# Bancos que llegan con nombre comercial o de la cooperativa y hay que mapear.
+BANCO_MAPEO = {
+    "NOVA":                                 "BCI",
+    "COOPERATIVA PERSONAL U. DE CHILE LTDA": "COOPEUCH",
+}
+_INDICE_BANCO = {_normalizar_texto(k): v for k, v in BANCO_MAPEO.items()}
+BANCO_SIN_DEFINIR = "NOBANCO"
+
+# Columnas que tocan las 14 reglas de normalización, con sus alias aceptados.
+# Se usa para el diagnóstico agregado: ocupación y columnas ausentes.
+COLUMNAS_REGLAS = [
+    ("1",     ("Apellido materno",)),
+    ("2",     ("Id nación", "Id nacion")),
+    ("3",     ("¿Es expatriado?",)),
+    ("4",     ("Estado de jubilación",)),
+    ("5",     ("Sistema de pensiones",)),
+    ("6",     ("Id banco", "Banco")),
+    ("7",     ("Monto cotizado en la Isapre", "Monto cotizado en Isapre")),
+    ("8",     ("Monto cotizado en la Isapre en UF", "Monto cotizado en Isapre en UF")),
+    ("10",    ("¿Jornada parcial?",)),
+    ("10-hrs",("Horas de trabajo semanales",)),
+    ("11",    ("Fecha de inicio de vacaciones",)),
+    ("12",    ("Fecha de incorporación al seguro de cesantía",)),
+    ("13",    ("¿Cotiza seguro de cesantía?",)),
+    ("14",    ("Modalidad del contrato",)),
+    ("ref",   ("Fecha de inicio del contrato",)),
+    ("salud", ("ID INSTITUCION DE SALUD", "ID INSTITUCIÓN DE SALUD")),
+]
+
+# Umbral de jornada parcial: <= 30 horas semanales es jornada parcial.
+JORNADA_PARCIAL_MAX_HORAS = 30
+
+# Log crudo del monto Isapre: muestreo por celda del valor tal como viene, con
+# fila e Id empleado, más el volcado a consola. Es solo para depurar el parseo
+# contra archivos reales; queda en False porque recolecta RUTs y ensucia el log.
+# NO afecta a los paneles de Verificación 7-8, Detalle de reglas ni Diagnóstico,
+# que se muestran siempre.
+DEBUG_MONTO_ISAPRE = False
+
+
+def _solo_ceros(valor) -> bool:
+    """True si el valor son puros ceros: '0', '00', '0.0', '0,00', '000-0'."""
+    if _vacio(valor):
+        return False
+    s = re.sub(r"[.,\-\s]", "", str(valor).strip())
+    return s != "" and set(s) == {"0"}
+
+
+def _buscar_columna(df, *candidatos):
+    """Devuelve el nombre real de la primera columna que calce (sin tildes/case)."""
+    normalizadas = {_normalizar_texto(c): c for c in df.columns}
+    for cand in candidatos:
+        real = normalizadas.get(_normalizar_texto(cand))
+        if real is not None:
+            return real
+    return None
+
+
+def _canon(valor) -> str:
+    """Forma canónica para comparar 'antes vs después' sin falsos positivos.
+
+    NaN, None, '' y '  ' colapsan a ''. Los números se comparan por su texto
+    normalizado, para que un cambio de tipo ('0' → 0) no cuente como cambio.
+    """
+    if _vacio(valor):
+        return ""
+    s = str(valor).strip()
+    try:
+        f = float(s.replace(",", "."))
+        return str(int(f)) if f == int(f) else str(f)
+    except (ValueError, TypeError):
+        return s
+
+
+def _medir_columna(antes, despues) -> dict:
+    """Compara dos versiones de una columna y mide qué cambió DE VERDAD."""
+    a = antes.apply(_canon)
+    d = despues.apply(_canon)
+    cambiadas = (a != d)
+    return {
+        "filas":            int(len(a)),
+        "no_vacias_antes":  int((a != "").sum()),
+        "vacias_antes":     int((a == "").sum()),
+        "cambios_reales":   int(cambiadas.sum()),
+        "rellenos":         int((cambiadas & (a == "")).sum()),
+        "sobrescrituras":   int((cambiadas & (a != "")).sum()),
+    }
+
+
+def _completar_vacios(df, col, valor) -> int:
+    """Rellena las celdas vacías de `col` con `valor`. Devuelve cuántas cambió."""
+    df[col] = df[col].astype("object")
+    mask = df[col].apply(_vacio).astype(bool)
+    df.loc[mask, col] = valor
+    return int(mask.sum())
+
+
+# ───── Regla 1: Apellido materno ─────
+def limpiar_apellido_materno(valor):
+    """'.' o ceros ('0', '00', ...) → campo vacío."""
+    if _vacio(valor):
+        return valor
+    s = str(valor).strip()
+    if s == "." or _solo_ceros(s):
+        return ""
+    return valor
+
+
+# ───── Regla 2: Id nación ─────
+def normalizar_nacionalidad(valor):
+    """Gentilicio → país (sin tildes, case-insensitive). Vacío → 'Chile'."""
+    if _vacio(valor):
+        return NACION_POR_DEFECTO
+    pais = _INDICE_NACIONALIDAD.get(_normalizar_texto(valor))
+    return pais if pais else str(valor).strip()
+
+
+# ───── Regla 3: ¿Es expatriado? ─────
+def calcular_expatriado(id_nacion):
+    """Se evalúa DESPUÉS de normalizar la nación: Chile → 'N', el resto → 'T'."""
+    return "N" if _normalizar_texto(id_nacion) == _normalizar_texto(NACION_POR_DEFECTO) else "T"
+
+
+# ───── Regla 6: Banco ─────
+def normalizar_banco(valor):
+    """Mapea bancos conocidos; vacío o en ceros → 'NOBANCO'."""
+    if _vacio(valor) or _solo_ceros(valor):
+        return BANCO_SIN_DEFINIR
+    return _INDICE_BANCO.get(_normalizar_texto(valor), str(valor).strip())
+
+
+# ───── Reglas 7 y 8: Institución de salud ─────
+def es_fonasa(valor) -> bool:
+    """True si la institución de salud es Fonasa (ignora case, tildes y prefijos)."""
+    return _normalizar_aseguradora(valor) == "fonasa"
+
+
+# ───── Regla 9: Monto cotizado Isapre ─────
+def parsear_monto(valor):
+    """Convierte el monto a número aceptando coma decimal.
+
+    El cliente manda el monto con coma ('4,5') y en el Excel en formato General
+    queda como texto/entero, perdiendo el decimal. Se toma el valor crudo de la
+    celda (antes de cualquier cast) y se fuerza el parseo cambiando ',' por '.'.
+    Devuelve (valor_convertido, hubo_cambio).
+    """
+    if _vacio(valor):
+        return valor, False
+
+    crudo = str(valor).strip()
+    limpio = re.sub(r"[^\d,.\-]", "", crudo)
+
+    # Si trae ambos separadores, el último es el decimal y el otro es de miles.
+    if "," in limpio and "." in limpio:
+        if limpio.rfind(",") > limpio.rfind("."):
+            limpio = limpio.replace(".", "").replace(",", ".")
+        else:
+            limpio = limpio.replace(",", "")
+    elif "," in limpio:
+        limpio = limpio.replace(",", ".")
+
+    try:
+        numero = float(limpio)
+    except ValueError:
+        return valor, False
+
+    convertido = int(numero) if numero == int(numero) else numero
+    return convertido, str(convertido) != crudo
+
+
+def clasificar_formato_monto(valor) -> str:
+    """Clasifica el formato CRUDO de la celda, antes de cualquier cast.
+
+    - 'coma'        → '4,5'   el decimal llegó con coma (se puede parsear)
+    - 'punto'       → '4.5'   el decimal llegó con punto (se puede parsear)
+    - 'sin_decimal' → '45'    NO hay decimal en la celda: se perdió al guardar
+                              el Excel, no hay fix posible desde el código
+    - 'no_numerico' → '%', 'N/A', texto libre
+    """
+    if _vacio(valor):
+        return "vacio"
+    crudo = str(valor).strip()
+    if not re.search(r"\d", crudo):
+        return "no_numerico"
+    if "," in crudo:
+        return "coma"
+    if "." in crudo:
+        return "punto"
+    return "sin_decimal"
+
+
+# ───── Regla 10: ¿Jornada parcial? ─────
+def jornada_parcial_por_horas(horas):
+    """<= JORNADA_PARCIAL_MAX_HORAS → 'S'; > → 'N'. Sin horas → None (no se toca)."""
+    if _vacio(horas):
+        return None
+    numero, _ = parsear_monto(horas)
+    if not isinstance(numero, (int, float)):
+        return None
+    return "S" if float(numero) <= JORNADA_PARCIAL_MAX_HORAS else "N"
+
+
+# ─────────────────────────────────────────────
 #  PROCESAMIENTO PRINCIPAL
 # ─────────────────────────────────────────────
 
@@ -646,7 +870,15 @@ def procesar_archivo(uploaded_file):
         "tipos_contrato_normalizados": 0,
         "monedas_normalizadas": 0,
         "valores_defecto_completados": 0,
+        "reglas_normalizacion":       0,
     }
+
+    # Detalle por regla nueva (para separarlo de los defaults que ya existían)
+    detalle_reglas = {}
+
+    def _anotar_regla(nombre, columna):
+        """Registra qué columna toca cada regla; el conteo se mide al final."""
+        columnas_por_regla.setdefault(nombre, columna)
 
     # Lista de correcciones de ubicación hechas (para el reporte)
     correcciones_ubicacion = []
@@ -760,6 +992,181 @@ def procesar_archivo(uploaded_file):
         )
         correcciones["salud_normalizadas"] = int((antes.fillna("") != df[col_salud].fillna("")).sum())
 
+    # ───── Reglas de normalización de contrato / previsión ─────
+    # Se aplican en el orden pedido: la nación se normaliza antes de calcular
+    # expatriado, y el monto Isapre se parsea antes de los overrides de Fonasa.
+    # Resumen del formato crudo de los montos Isapre (ver DEBUG_MONTO_ISAPRE)
+    log_monto_isapre = {}
+
+    # Snapshot ANTES de aplicar las reglas: el detalle se mide comparando
+    # contra esta copia, no acumulando contadores por fila procesada.
+    df_antes_reglas = df.copy()
+    columnas_por_regla = {}
+
+    # 1) Apellido materno: '.' o ceros → vacío
+    col = _buscar_columna(df, "Apellido materno")
+    if col:
+        antes = df[col].copy()
+        df[col] = df[col].astype("object").apply(limpiar_apellido_materno)
+        _anotar_regla("1. Apellido materno ('.'/ceros → vacío)", col)
+
+    # 2) Id nación: gentilicio → país, y vacío → Chile
+    col_nacion = _buscar_columna(df, "Id nación", "Id nacion")
+    if col_nacion:
+        antes = df[col_nacion].copy()
+        df[col_nacion] = df[col_nacion].astype("object").apply(normalizar_nacionalidad)
+        _anotar_regla("2. Id nación (gentilicio → país / vacío → Chile)", col_nacion)
+
+    # 3) ¿Es expatriado? — se calcula con la nación ya normalizada
+    col_exp = _buscar_columna(df, "¿Es expatriado?")
+    if col_exp and col_nacion:
+        antes = df[col_exp].copy()
+        df[col_exp] = df[col_nacion].apply(calcular_expatriado)
+        _anotar_regla("3. ¿Es expatriado? (derivado de Id nación)", col_exp)
+
+    # 4-5, 13-14) Vacíos con valor por defecto
+    DEFAULTS_REGLAS = [
+        ("4",  ("Estado de jubilación",),        "0"),
+        ("5",  ("Sistema de pensiones",),        "N"),
+        ("13", ("¿Cotiza seguro de cesantía?",), "S"),
+        ("14", ("Modalidad del contrato",),      "C"),
+    ]
+    for num, nombres, valor_defecto in DEFAULTS_REGLAS:
+        col = _buscar_columna(df, *nombres)
+        if col:
+            _completar_vacios(df, col, valor_defecto)
+            _anotar_regla(f"{num}. {nombres[0]} (vacío → '{valor_defecto}')", col)
+
+    # 6) Banco: mapeo de los que faltan identificar
+    col = _buscar_columna(df, "Id banco", "Banco")
+    if col:
+        antes = df[col].copy()
+        df[col] = df[col].astype("object").apply(normalizar_banco)
+        _anotar_regla("6. Banco (mapeo / vacío-ceros → NOBANCO)", col)
+
+    # 9) Monto Isapre: parseo forzando la coma decimal (antes de los overrides)
+    col_monto_pesos = _buscar_columna(df, "Monto cotizado en la Isapre", "Monto cotizado en Isapre")
+    col_monto_uf    = _buscar_columna(df, "Monto cotizado en la Isapre en UF", "Monto cotizado en Isapre en UF")
+    for col in [c for c in (col_monto_pesos, col_monto_uf) if c]:
+        nuevos, parseados = [], 0
+        for idx, crudo in df[col].items():
+            convertido, cambio = parsear_monto(crudo)
+            nuevos.append(convertido)
+            if cambio:
+                parseados += 1
+            if DEBUG_MONTO_ISAPRE and not _vacio(crudo):
+                formato = clasificar_formato_monto(crudo)
+                resumen = log_monto_isapre.setdefault(col, {})
+                caso = resumen.setdefault(formato, {"total": 0, "ejemplos": []})
+                caso["total"] += 1
+                if len(caso["ejemplos"]) < 5:
+                    # Guardar fila, empleado y salud para poder rastrear el origen
+                    caso["ejemplos"].append({
+                        "fila":       int(idx) + fila_header + 2,
+                        "empleado":   str(df.at[idx, "Id empleado"]).strip() if "Id empleado" in df.columns else "",
+                        "salud":      str(df.at[idx, col_salud]).strip() if col_salud else "",
+                        "crudo":      repr(crudo),
+                        "convertido": repr(convertido),
+                    })
+        df[col] = pd.Series(nuevos, index=df.index, dtype="object")
+        _anotar_regla(f"9. {col} (parseo coma decimal)", col)
+
+    # 7-8) Si la institución de salud es Fonasa: monto en pesos → 0, monto UF → '%'
+    verificacion_fonasa = {}
+    if col_salud:
+        mask_fonasa = df[col_salud].apply(es_fonasa).astype(bool)
+        verificacion_fonasa["filas_fonasa"] = int(mask_fonasa.sum())
+        for col, valor_fonasa, num in ((col_monto_pesos, 0, "7"), (col_monto_uf, "%", "8")):
+            if col:
+                df[col] = df[col].astype("object")
+                distintos = mask_fonasa & (df[col] != valor_fonasa)
+                df.loc[mask_fonasa, col] = valor_fonasa
+                _anotar_regla(f"{num}. {col} (Fonasa → {valor_fonasa!r})", col)
+                # Verificación post-override: qué quedó en la columna para Fonasa
+                if verificacion_fonasa["filas_fonasa"]:
+                    conteo = df.loc[mask_fonasa, col].astype(str).value_counts()
+                    verificacion_fonasa[col] = {str(k): int(v) for k, v in conteo.items()}
+
+    # 10) ¿Jornada parcial? vacío → según horas de trabajo semanales
+    col_jornada = _buscar_columna(df, "¿Jornada parcial?")
+    col_horas   = _buscar_columna(df, "Horas de trabajo semanales")
+    if col_jornada and col_horas:
+        _anotar_regla("10. ¿Jornada parcial? (según horas semanales)", col_jornada)
+        df[col_jornada] = df[col_jornada].astype("object")
+        for idx in df.index:
+            if not _vacio(df.at[idx, col_jornada]):
+                continue
+            valor = jornada_parcial_por_horas(df.at[idx, col_horas])
+            if valor is not None:
+                df.at[idx, col_jornada] = valor
+
+    # 11-12) Fechas que se completan con la fecha de inicio del contrato
+    col_inicio = _buscar_columna(df, "Fecha de inicio del contrato")
+    if col_inicio:
+        for nombres in (("Fecha de inicio de vacaciones",),
+                        ("Fecha de incorporación al seguro de cesantía",)):
+            col = _buscar_columna(df, *nombres)
+            if not col:
+                continue
+            df[col] = df[col].astype("object")
+            mask = df[col].apply(_vacio).astype(bool) & ~df[col_inicio].apply(_vacio).astype(bool)
+            df.loc[mask, col] = df.loc[mask, col_inicio]
+            _anotar_regla(f"11-12. {col} (vacía → fecha inicio contrato)", col)
+
+    # ── Medición real: comparar cada columna contra el snapshot previo ──
+    for _nombre, _col in columnas_por_regla.items():
+        if _col in df.columns and _col in df_antes_reglas.columns:
+            detalle_reglas[_nombre] = _medir_columna(df_antes_reglas[_col], df[_col])
+    correcciones["reglas_normalizacion"] = sum(
+        m["cambios_reales"] for m in detalle_reglas.values()
+    )
+
+    # ── Diagnóstico agregado (solo conteos, sin datos personales) ──
+    diagnostico = {
+        "filas":            int(len(df)),
+        "columnas":         int(len(df.columns)),
+        "filas_originales": int(total_original),
+        "filas_eliminadas": int(filas_eliminadas),
+        "ocupacion":        [],
+        "ausentes":         [],
+    }
+    for _num, _cands in COLUMNAS_REGLAS:
+        _col = _buscar_columna(df, *_cands)
+        if _col is None:
+            diagnostico["ausentes"].append(f"{_cands[0]} (regla {_num})")
+            continue
+        _serie = df_antes_reglas[_col] if _col in df_antes_reglas.columns else df[_col]
+        _canonica = _serie.apply(_canon)
+        diagnostico["ocupacion"].append({
+            "regla":      _num,
+            "columna":    _col,
+            "con_valor":  int((_canonica != "").sum()),
+            "vacias":     int((_canonica == "").sum()),
+        })
+
+    # Paneles permanentes: se reescriben en cada carga para no arrastrar
+    # resultados del archivo anterior en la misma sesión.
+    st.session_state["diagnostico_maestro"] = diagnostico
+    st.session_state["detalle_reglas"] = detalle_reglas
+    st.session_state["verificacion_fonasa"] = verificacion_fonasa
+
+    # Log crudo (detrás de la bandera). Se limpia siempre, si no el panel
+    # quedaría mostrando los datos del archivo procesado anteriormente.
+    st.session_state["debug_monto_isapre"] = (
+        log_monto_isapre if (DEBUG_MONTO_ISAPRE and log_monto_isapre) else None
+    )
+
+    if DEBUG_MONTO_ISAPRE and log_monto_isapre:
+        for _col, _resumen in log_monto_isapre.items():
+            print(f"[DEBUG_MONTO_ISAPRE] {_col}:")
+            for _formato, _caso in sorted(_resumen.items()):
+                # Sin Id empleado: el log del servidor puede quedar en disco
+                _ej = "; ".join(
+                    f"fila {e['fila']} {e['crudo']} → {e['convertido']}"
+                    for e in _caso["ejemplos"]
+                )
+                print(f"    {_formato:12s} {_caso['total']:6d}  ej: {_ej}")
+
     # ───── Emails ─────
     for campo in campos_email:
         if campo in df.columns:
@@ -812,6 +1219,14 @@ def procesar_archivo(uploaded_file):
             if _vacio(valor):
                 # Los emails y teléfonos ya se completaron, no reportar como vacíos
                 if campo in campos_email or campo in campos_telefono:
+                    continue
+                if campo == "Tipo del contrato":
+                    # No se rellena: la decisión (Indefinido vs. Plazo Fijo) es
+                    # del cliente. Solo se deja como observación en el reporte.
+                    errores_fila.append(
+                        "OBSERVACIÓN: Tipo del contrato vacío — requiere definición del "
+                        "cliente (Indefinido / Plazo Fijo). No se completa automáticamente."
+                    )
                     continue
                 campos_vacios.append(campo)
                 continue
@@ -999,15 +1414,18 @@ if archivo:
             c1.metric("🗺️ Regiones corregidas",         correcciones["regiones_corregidas"])
             c2.metric("🏙️ Ciudades corregidas",         correcciones["ciudades_corregidas"])
 
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             c1.metric("🏦 AFP normalizadas",            correcciones["afp_normalizadas"])
             c2.metric("🏥 Salud normalizadas",          correcciones["salud_normalizadas"])
+            c3.metric("⚙️ Reglas aplicadas",            correcciones["reglas_normalizacion"])
 
             if correcciones["valores_defecto_completados"] > 0:
                 st.info(
-                    f"📝 Se completaron **{correcciones['valores_defecto_completados']}** celda(s) "
-                    f"vacías con valores por defecto (Licencia de conducir: N · "
-                    f"Profesión: sinDefinir · Nivel de estudio: 0)."
+                    f"📝 Reglas preexistentes: se completaron "
+                    f"**{correcciones['valores_defecto_completados']}** celda(s) vacías en "
+                    f"Licencia de conducir (N) · Profesión (sinDefinir) · Nivel de estudio (0). "
+                    f"No incluye las reglas de normalización nuevas, que van aparte en "
+                    f"**⚙️ Reglas aplicadas**."
                 )
 
             if correcciones["caracteres_reparados"] > 0:
@@ -1015,6 +1433,147 @@ if archivo:
                     f"🔤 Se repararon **{correcciones['caracteres_reparados']}** celda(s) "
                     f"con caracteres corruptos (ej: 'AVENDA√ëO' → 'AVENDAÑO')."
                 )
+
+            # Log crudo del monto Isapre — solo con DEBUG_MONTO_ISAPRE = True
+            debug_monto = st.session_state.get("debug_monto_isapre")
+            if debug_monto:
+                with st.expander("🔍 Formato crudo del Monto cotizado Isapre", expanded=True):
+                    ETIQUETAS = {
+                        "coma":        "Coma decimal ('4,5') — se parsea OK",
+                        "punto":       "Punto decimal ('4.5') — se parsea OK",
+                        "sin_decimal": "Sin decimal ('45') — el decimal NO viene en el Excel",
+                        "no_numerico": "No numérico ('%', texto)",
+                    }
+                    for _col, _resumen in debug_monto.items():
+                        st.markdown(f"**{_col}**")
+                        st.dataframe(
+                            pd.DataFrame([
+                                {"Formato": ETIQUETAS.get(f, f), "Valores": caso["total"]}
+                                for f, caso in sorted(_resumen.items())
+                            ]),
+                            use_container_width=True, hide_index=True,
+                        )
+                        st.caption("Ejemplos (hasta 5 por formato), con la fila del Excel de origen:")
+                        st.dataframe(
+                            pd.DataFrame([
+                                {
+                                    "Formato":     ETIQUETAS.get(f, f),
+                                    "Fila Excel":  e["fila"],
+                                    "Id empleado": e["empleado"],
+                                    "Inst. salud": e["salud"],
+                                    "Crudo":       e["crudo"],
+                                    "Convertido":  e["convertido"],
+                                }
+                                for f, caso in sorted(_resumen.items())
+                                for e in caso["ejemplos"]
+                            ]),
+                            use_container_width=True, hide_index=True,
+                        )
+
+            # Diagnóstico agregado del maestro (solo conteos)
+            diag = st.session_state.get("diagnostico_maestro") or {}
+            if diag:
+                with st.expander("🧪 Diagnóstico agregado del maestro", expanded=True):
+                    d1, d2, d3 = st.columns(3)
+                    d1.metric("Filas procesadas", diag["filas"])
+                    d2.metric("Columnas del Excel", diag["columnas"])
+                    d3.metric("Filas descartadas", diag["filas_eliminadas"])
+
+                    if diag["ausentes"]:
+                        st.warning(
+                            "Columnas que NO vienen en el archivo (su regla no se aplicó): "
+                            + " · ".join(diag["ausentes"])
+                        )
+                    else:
+                        st.success("Todas las columnas de las 14 reglas vienen en el archivo.")
+
+                    st.markdown("**Ocupación por columna (antes de aplicar las reglas)**")
+                    ocup = pd.DataFrame(diag["ocupacion"])
+                    if not ocup.empty:
+                        detalle_m = st.session_state.get("detalle_reglas") or {}
+                        cambios_por_col = {
+                            m_col: m["cambios_reales"]
+                            for k, m in detalle_m.items()
+                            for m_col in [k.split(". ", 1)[-1].rsplit(" (", 1)[0]]
+                        }
+                        ocup["Cambios reales"] = ocup["columna"].map(cambios_por_col).fillna(0).astype(int)
+                        ocup = ocup.rename(columns={
+                            "regla": "Regla", "columna": "Columna",
+                            "con_valor": "Con valor", "vacias": "Vacías",
+                        })
+                        st.dataframe(ocup, use_container_width=True, hide_index=True)
+
+                    # Texto plano copiable, sin datos personales
+                    lineas = [
+                        f"Filas procesadas: {diag['filas']} (originales {diag['filas_originales']}, "
+                        f"descartadas {diag['filas_eliminadas']})",
+                        f"Columnas del Excel: {diag['columnas']}",
+                        f"Columnas ausentes: {', '.join(diag['ausentes']) or 'ninguna'}",
+                        "",
+                        f"{'COLUMNA':52s} {'CON VALOR':>10s} {'VACIAS':>8s} {'CAMBIOS':>8s}",
+                    ]
+                    for _fila in diag["ocupacion"]:
+                        _camb = int(ocup.loc[ocup["Columna"] == _fila["columna"], "Cambios reales"].iloc[0]) \
+                                if not ocup.empty else 0
+                        lineas.append(
+                            f"{_fila['columna'][:52]:52s} {_fila['con_valor']:10d} "
+                            f"{_fila['vacias']:8d} {_camb:8d}"
+                        )
+                    total_cambios = sum(m["cambios_reales"] for m in (st.session_state.get("detalle_reglas") or {}).values())
+                    lineas += ["", f"TOTAL cambios reales: {total_cambios}"]
+                    st.caption("Resumen copiable (solo conteos, sin datos personales):")
+                    st.code("\n".join(lineas), language="text")
+
+            # Verificación post-proceso de las reglas 7 y 8 (Fonasa)
+            verif = st.session_state.get("verificacion_fonasa") or {}
+            if verif.get("filas_fonasa"):
+                with st.expander(
+                    f"✅ Verificación reglas 7-8 (Fonasa) — {verif['filas_fonasa']} fila(s) Fonasa",
+                    expanded=True,
+                ):
+                    st.caption(
+                        "Valores que quedaron en las columnas de monto DESPUÉS de aplicar "
+                        "el override de Fonasa. La columna UF debe mostrar solo '%'."
+                    )
+                    for _col, _conteo in verif.items():
+                        if _col == "filas_fonasa":
+                            continue
+                        st.markdown(f"**{_col}**")
+                        st.dataframe(
+                            pd.DataFrame(
+                                [{"Valor final": k, "Filas Fonasa": v} for k, v in _conteo.items()]
+                            ),
+                            use_container_width=True, hide_index=True,
+                        )
+
+            # Detalle por regla nueva (separado de los defaults preexistentes)
+            detalle = st.session_state.get("detalle_reglas") or {}
+            if detalle:
+                with st.expander(
+                    f"⚙️ Detalle de las reglas nuevas "
+                    f"({sum(m['cambios_reales'] for m in detalle.values())} celda(s) modificada(s))",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "**Cambios reales** = celdas cuyo valor es distinto antes vs. después "
+                        "(no filas procesadas). *Rellenos* = la celda estaba vacía. "
+                        "*Sobrescrituras* = la celda tenía un valor y se reemplazó. "
+                        "*No vacías antes* dice si la columna venía con datos del cliente."
+                    )
+                    st.dataframe(
+                        pd.DataFrame([
+                            {
+                                "Regla":            k,
+                                "Filas":            m["filas"],
+                                "No vacías antes":  m["no_vacias_antes"],
+                                "Cambios reales":   m["cambios_reales"],
+                                "Rellenos":         m["rellenos"],
+                                "Sobrescrituras":   m["sobrescrituras"],
+                            }
+                            for k, m in sorted(detalle.items())
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
 
             # Panel de correcciones de ubicación (detalle)
             if correcciones_ubicacion:
