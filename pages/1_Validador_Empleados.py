@@ -647,8 +647,12 @@ COLUMNAS_REGLAS = [
 # Umbral de jornada parcial: <= 30 horas semanales es jornada parcial.
 JORNADA_PARCIAL_MAX_HORAS = 30
 
-# Deja en True para imprimir el valor crudo vs. el convertido del monto Isapre.
-DEBUG_MONTO_ISAPRE = True
+# Log crudo del monto Isapre: muestreo por celda del valor tal como viene, con
+# fila e Id empleado, más el volcado a consola. Es solo para depurar el parseo
+# contra archivos reales; queda en False porque recolecta RUTs y ensucia el log.
+# NO afecta a los paneles de Verificación 7-8, Detalle de reglas ni Diagnóstico,
+# que se muestran siempre.
+DEBUG_MONTO_ISAPRE = False
 
 
 def _solo_ceros(valor) -> bool:
@@ -1140,12 +1144,19 @@ def procesar_archivo(uploaded_file):
             "vacias":     int((_canonica == "").sum()),
         })
 
+    # Paneles permanentes: se reescriben en cada carga para no arrastrar
+    # resultados del archivo anterior en la misma sesión.
     st.session_state["diagnostico_maestro"] = diagnostico
     st.session_state["detalle_reglas"] = detalle_reglas
     st.session_state["verificacion_fonasa"] = verificacion_fonasa
 
+    # Log crudo (detrás de la bandera). Se limpia siempre, si no el panel
+    # quedaría mostrando los datos del archivo procesado anteriormente.
+    st.session_state["debug_monto_isapre"] = (
+        log_monto_isapre if (DEBUG_MONTO_ISAPRE and log_monto_isapre) else None
+    )
+
     if DEBUG_MONTO_ISAPRE and log_monto_isapre:
-        st.session_state["debug_monto_isapre"] = log_monto_isapre
         for _col, _resumen in log_monto_isapre.items():
             print(f"[DEBUG_MONTO_ISAPRE] {_col}:")
             for _formato, _caso in sorted(_resumen.items()):
@@ -1423,7 +1434,7 @@ if archivo:
                     f"con caracteres corruptos (ej: 'AVENDA√ëO' → 'AVENDAÑO')."
                 )
 
-            # Panel de depuración del monto Isapre (DEBUG_MONTO_ISAPRE)
+            # Log crudo del monto Isapre — solo con DEBUG_MONTO_ISAPRE = True
             debug_monto = st.session_state.get("debug_monto_isapre")
             if debug_monto:
                 with st.expander("🔍 Formato crudo del Monto cotizado Isapre", expanded=True):
