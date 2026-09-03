@@ -648,6 +648,37 @@ def _buscar_columna(df, *candidatos):
     return None
 
 
+def _canon(valor) -> str:
+    """Forma canónica para comparar 'antes vs después' sin falsos positivos.
+
+    NaN, None, '' y '  ' colapsan a ''. Los números se comparan por su texto
+    normalizado, para que un cambio de tipo ('0' → 0) no cuente como cambio.
+    """
+    if _vacio(valor):
+        return ""
+    s = str(valor).strip()
+    try:
+        f = float(s.replace(",", "."))
+        return str(int(f)) if f == int(f) else str(f)
+    except (ValueError, TypeError):
+        return s
+
+
+def _medir_columna(antes, despues) -> dict:
+    """Compara dos versiones de una columna y mide qué cambió DE VERDAD."""
+    a = antes.apply(_canon)
+    d = despues.apply(_canon)
+    cambiadas = (a != d)
+    return {
+        "filas":            int(len(a)),
+        "no_vacias_antes":  int((a != "").sum()),
+        "vacias_antes":     int((a == "").sum()),
+        "cambios_reales":   int(cambiadas.sum()),
+        "rellenos":         int((cambiadas & (a == "")).sum()),
+        "sobrescrituras":   int((cambiadas & (a != "")).sum()),
+    }
+
+
 def _completar_vacios(df, col, valor) -> int:
     """Rellena las celdas vacías de `col` con `valor`. Devuelve cuántas cambió."""
     df[col] = df[col].astype("object")
@@ -820,13 +851,9 @@ def procesar_archivo(uploaded_file):
     # Detalle por regla nueva (para separarlo de los defaults que ya existían)
     detalle_reglas = {}
 
-    def _anotar_regla(nombre, cantidad):
-        """Suma al contador global y al detalle por regla."""
-        cantidad = int(cantidad)
-        if cantidad:
-            detalle_reglas[nombre] = detalle_reglas.get(nombre, 0) + cantidad
-            correcciones["reglas_normalizacion"] += cantidad
-        return cantidad
+    def _anotar_regla(nombre, columna):
+        """Registra qué columna toca cada regla; el conteo se mide al final."""
+        columnas_por_regla.setdefault(nombre, columna)
 
     # Lista de correcciones de ubicación hechas (para el reporte)
     correcciones_ubicacion = []
@@ -946,29 +973,31 @@ def procesar_archivo(uploaded_file):
     # Resumen del formato crudo de los montos Isapre (ver DEBUG_MONTO_ISAPRE)
     log_monto_isapre = {}
 
+    # Snapshot ANTES de aplicar las reglas: el detalle se mide comparando
+    # contra esta copia, no acumulando contadores por fila procesada.
+    df_antes_reglas = df.copy()
+    columnas_por_regla = {}
+
     # 1) Apellido materno: '.' o ceros → vacío
     col = _buscar_columna(df, "Apellido materno")
     if col:
         antes = df[col].copy()
         df[col] = df[col].astype("object").apply(limpiar_apellido_materno)
-        _anotar_regla("1. Apellido materno ('.'/ceros → vacío)",
-                      (antes.fillna("") != df[col].fillna("")).sum())
+        _anotar_regla("1. Apellido materno ('.'/ceros → vacío)", col)
 
     # 2) Id nación: gentilicio → país, y vacío → Chile
     col_nacion = _buscar_columna(df, "Id nación", "Id nacion")
     if col_nacion:
         antes = df[col_nacion].copy()
         df[col_nacion] = df[col_nacion].astype("object").apply(normalizar_nacionalidad)
-        _anotar_regla("2. Id nación (gentilicio → país / vacío → Chile)",
-                      (antes.fillna("") != df[col_nacion].fillna("")).sum())
+        _anotar_regla("2. Id nación (gentilicio → país / vacío → Chile)", col_nacion)
 
     # 3) ¿Es expatriado? — se calcula con la nación ya normalizada
     col_exp = _buscar_columna(df, "¿Es expatriado?")
     if col_exp and col_nacion:
         antes = df[col_exp].copy()
         df[col_exp] = df[col_nacion].apply(calcular_expatriado)
-        _anotar_regla("3. ¿Es expatriado? (derivado de Id nación)",
-                      (antes.fillna("") != df[col_exp].fillna("")).sum())
+        _anotar_regla("3. ¿Es expatriado? (derivado de Id nación)", col_exp)
 
     # 4-5, 13-14) Vacíos con valor por defecto
     DEFAULTS_REGLAS = [
@@ -980,16 +1009,15 @@ def procesar_archivo(uploaded_file):
     for num, nombres, valor_defecto in DEFAULTS_REGLAS:
         col = _buscar_columna(df, *nombres)
         if col:
-            _anotar_regla(f"{num}. {nombres[0]} (vacío → '{valor_defecto}')",
-                          _completar_vacios(df, col, valor_defecto))
+            _completar_vacios(df, col, valor_defecto)
+            _anotar_regla(f"{num}. {nombres[0]} (vacío → '{valor_defecto}')", col)
 
     # 6) Banco: mapeo de los que faltan identificar
     col = _buscar_columna(df, "Id banco", "Banco")
     if col:
         antes = df[col].copy()
         df[col] = df[col].astype("object").apply(normalizar_banco)
-        _anotar_regla("6. Banco (mapeo / vacío-ceros → NOBANCO)",
-                      (antes.fillna("") != df[col].fillna("")).sum())
+        _anotar_regla("6. Banco (mapeo / vacío-ceros → NOBANCO)", col)
 
     # 9) Monto Isapre: parseo forzando la coma decimal (antes de los overrides)
     col_monto_pesos = _buscar_columna(df, "Monto cotizado en la Isapre", "Monto cotizado en Isapre")
@@ -1016,7 +1044,7 @@ def procesar_archivo(uploaded_file):
                         "convertido": repr(convertido),
                     })
         df[col] = pd.Series(nuevos, index=df.index, dtype="object")
-        _anotar_regla(f"9. {col} (parseo coma decimal)", parseados)
+        _anotar_regla(f"9. {col} (parseo coma decimal)", col)
 
     # 7-8) Si la institución de salud es Fonasa: monto en pesos → 0, monto UF → '%'
     verificacion_fonasa = {}
@@ -1028,7 +1056,7 @@ def procesar_archivo(uploaded_file):
                 df[col] = df[col].astype("object")
                 distintos = mask_fonasa & (df[col] != valor_fonasa)
                 df.loc[mask_fonasa, col] = valor_fonasa
-                _anotar_regla(f"{num}. {col} (Fonasa → {valor_fonasa!r})", distintos.sum())
+                _anotar_regla(f"{num}. {col} (Fonasa → {valor_fonasa!r})", col)
                 # Verificación post-override: qué quedó en la columna para Fonasa
                 if verificacion_fonasa["filas_fonasa"]:
                     conteo = df.loc[mask_fonasa, col].astype(str).value_counts()
@@ -1038,6 +1066,7 @@ def procesar_archivo(uploaded_file):
     col_jornada = _buscar_columna(df, "¿Jornada parcial?")
     col_horas   = _buscar_columna(df, "Horas de trabajo semanales")
     if col_jornada and col_horas:
+        _anotar_regla("10. ¿Jornada parcial? (según horas semanales)", col_jornada)
         df[col_jornada] = df[col_jornada].astype("object")
         for idx in df.index:
             if not _vacio(df.at[idx, col_jornada]):
@@ -1045,7 +1074,6 @@ def procesar_archivo(uploaded_file):
             valor = jornada_parcial_por_horas(df.at[idx, col_horas])
             if valor is not None:
                 df.at[idx, col_jornada] = valor
-                _anotar_regla("10. ¿Jornada parcial? (según horas semanales)", 1)
 
     # 11-12) Fechas que se completan con la fecha de inicio del contrato
     col_inicio = _buscar_columna(df, "Fecha de inicio del contrato")
@@ -1058,7 +1086,15 @@ def procesar_archivo(uploaded_file):
             df[col] = df[col].astype("object")
             mask = df[col].apply(_vacio).astype(bool) & ~df[col_inicio].apply(_vacio).astype(bool)
             df.loc[mask, col] = df.loc[mask, col_inicio]
-            _anotar_regla(f"11-12. {col} (vacía → fecha inicio contrato)", mask.sum())
+            _anotar_regla(f"11-12. {col} (vacía → fecha inicio contrato)", col)
+
+    # ── Medición real: comparar cada columna contra el snapshot previo ──
+    for _nombre, _col in columnas_por_regla.items():
+        if _col in df.columns and _col in df_antes_reglas.columns:
+            detalle_reglas[_nombre] = _medir_columna(df_antes_reglas[_col], df[_col])
+    correcciones["reglas_normalizacion"] = sum(
+        m["cambios_reales"] for m in detalle_reglas.values()
+    )
 
     st.session_state["detalle_reglas"] = detalle_reglas
     st.session_state["verificacion_fonasa"] = verificacion_fonasa
@@ -1403,13 +1439,28 @@ if archivo:
             detalle = st.session_state.get("detalle_reglas") or {}
             if detalle:
                 with st.expander(
-                    f"⚙️ Detalle de las reglas nuevas ({sum(detalle.values())} celda(s))",
+                    f"⚙️ Detalle de las reglas nuevas "
+                    f"({sum(m['cambios_reales'] for m in detalle.values())} celda(s) modificada(s))",
                     expanded=False,
                 ):
+                    st.caption(
+                        "**Cambios reales** = celdas cuyo valor es distinto antes vs. después "
+                        "(no filas procesadas). *Rellenos* = la celda estaba vacía. "
+                        "*Sobrescrituras* = la celda tenía un valor y se reemplazó. "
+                        "*No vacías antes* dice si la columna venía con datos del cliente."
+                    )
                     st.dataframe(
-                        pd.DataFrame(
-                            [{"Regla": k, "Celdas": v} for k, v in sorted(detalle.items())]
-                        ),
+                        pd.DataFrame([
+                            {
+                                "Regla":            k,
+                                "Filas":            m["filas"],
+                                "No vacías antes":  m["no_vacias_antes"],
+                                "Cambios reales":   m["cambios_reales"],
+                                "Rellenos":         m["rellenos"],
+                                "Sobrescrituras":   m["sobrescrituras"],
+                            }
+                            for k, m in sorted(detalle.items())
+                        ]),
                         use_container_width=True, hide_index=True,
                     )
 
