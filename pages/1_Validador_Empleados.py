@@ -292,6 +292,69 @@ def limpiar_direccion(valor):
     return re.sub(r"[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9 ]", "", str(valor).strip())
 
 
+# Palabras que cortan la dirección: lo que viene después no es la calle.
+_CORTE_DIRECCION = r"\b(?:depto|dpto|depto\.?|departamento|bloque|block|blok)\b"
+
+
+def separar_calle_numero(nombre_crudo, numero_actual=None):
+    """Separa 'REMBRANDT 571 VILLA LA ARBOLEDA' en nombre y altura.
+
+    Devuelve (nombre, numero, advertencia). Si el número no se puede
+    determinar con seguridad, NO se elimina del nombre y se devuelve una
+    advertencia, para no perder el dato.
+
+    Reglas:
+    - Un número precedido por '#' o 'N°' es la altura, sin ambigüedad.
+    - Si no, se toma el último número que NO esté al inicio del texto: en
+      '4 ORIENTE 970' el 4 es parte del nombre y 970 es la altura.
+    - Un único número al inicio ('4 ORIENTE') es parte del nombre: ambiguo.
+    """
+    if _vacio(nombre_crudo):
+        return nombre_crudo, numero_actual, None
+
+    texto = str(nombre_crudo).strip()
+    # Cortar desde depto/bloque en adelante (esa parte no es calle ni altura)
+    texto = re.split(_CORTE_DIRECCION, texto, flags=re.IGNORECASE)[0]
+    # Limpiar separadores, conservando '#' y 'º/°' para detectar la altura
+    texto = re.sub(r"[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9#°º ]", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    # 1) Altura explícita: '#600', 'N° 600'
+    m = re.search(r"(?:#|\bN\s*[°º]?\s*)\s*(\d+)", texto, flags=re.IGNORECASE)
+    if m:
+        numero = m.group(1)
+        nombre = (texto[:m.start()] + " " + texto[m.end():])
+    else:
+        # 2) Último número que no esté al inicio del texto
+        candidatos = [x for x in re.finditer(r"\b\d+\b", texto) if x.start() > 0]
+        if not candidatos:
+            # Sin número, o un único número al inicio → ambiguo: no tocar
+            nombre = re.sub(r"\s+", " ", texto.replace("#", " ")).strip()
+            hay_digito = bool(re.search(r"\d", texto))
+            adv = None
+            if hay_digito and _vacio(numero_actual):
+                adv = (f"Numero Calle vacío y no se pudo determinar la altura en "
+                       f"Nombre Calle ('{str(nombre_crudo).strip()}'): se dejó el número en el nombre")
+            return nombre, numero_actual, adv
+        m = candidatos[-1]
+        numero = m.group(0)
+        nombre = (texto[:m.start()] + " " + texto[m.end():])
+
+    nombre = re.sub(r"[#°º]", " ", nombre)
+    nombre = re.sub(r"\b[Nn]\b", " ", nombre)          # 'N' suelta de 'N°'
+    nombre = re.sub(r"\s+", " ", nombre).strip()
+
+    # Si Numero Calle ya trae un dato distinto, no lo pisamos: avisamos
+    if not _vacio(numero_actual):
+        if str(numero_actual).strip() == numero:
+            return nombre, numero_actual, None
+        return (str(nombre_crudo).strip(), numero_actual,
+                f"Nombre Calle contiene '{numero}' pero Numero Calle dice "
+                f"'{str(numero_actual).strip()}': se dejó el nombre sin modificar")
+
+    return nombre, numero, None
+
+
 def limpiar_nombre_calle(valor):
     """Limpia el Nombre Calle: elimina caracteres especiales, números
     y palabras como depto/departamento/bloque/block y todo lo que las sigue."""
@@ -599,29 +662,30 @@ def corregir_ubicacion(codigo_comuna, region_escrita, ciudad_escrita):
 
 # Gentilicio → nombre de país. Las claves se normalizan (minúsculas, sin tildes)
 # al construir el índice, así que basta con agregar la fila nueva aquí.
+# Los valores son el id que espera Rex+: minúscula y sin tilde.
 NACIONALIDAD_MAPEO = {
-    "peruana":     "Perú",
-    "peruano":     "Perú",
-    "uruguaya":    "Uruguay",
-    "uruguayo":    "Uruguay",
-    "chilena":     "Chile",
-    "chileno":     "Chile",
-    "colombiana":  "Colombia",
-    "colombiano":  "Colombia",
-    "venezolana":  "Venezuela",
-    "venezolano":  "Venezuela",
+    "peruana":     "peru",
+    "peruano":     "peru",
+    "uruguaya":    "uruguay",
+    "uruguayo":    "uruguay",
+    "chilena":     "chile",
+    "chileno":     "chile",
+    "colombiana":  "colombia",
+    "colombiano":  "colombia",
+    "venezolana":  "venezuela",
+    "venezolano":  "venezuela",
 }
 _INDICE_NACIONALIDAD = {_normalizar_texto(k): v for k, v in NACIONALIDAD_MAPEO.items()}
 
-NACION_POR_DEFECTO = "Chile"
+NACION_POR_DEFECTO = "chile"
 
 # Bancos que llegan con nombre comercial o de la cooperativa y hay que mapear.
 BANCO_MAPEO = {
-    "NOVA":                                 "BCI",
-    "COOPERATIVA PERSONAL U. DE CHILE LTDA": "COOPEUCH",
+    "NOVA":                                 "bci",
+    "COOPERATIVA PERSONAL U. DE CHILE LTDA": "copeuch",
 }
 _INDICE_BANCO = {_normalizar_texto(k): v for k, v in BANCO_MAPEO.items()}
-BANCO_SIN_DEFINIR = "NOBANCO"
+BANCO_SIN_DEFINIR = "nobanco"
 
 # Columnas que tocan las 14 reglas de normalización, con sus alias aceptados.
 # Se usa para el diagnóstico agregado: ocupación y columnas ausentes.
@@ -634,6 +698,7 @@ COLUMNAS_REGLAS = [
     ("6",     ("Id banco", "Banco")),
     ("7",     ("Monto cotizado en la Isapre", "Monto cotizado en Isapre")),
     ("8",     ("Monto cotizado en la Isapre en UF", "Monto cotizado en Isapre en UF")),
+    ("8-mon", ("Moneda de la cotización", "Moneda de la cotizacion")),
     ("10",    ("¿Jornada parcial?",)),
     ("10-hrs",("Horas de trabajo semanales",)),
     ("11",    ("Fecha de inicio de vacaciones",)),
@@ -728,22 +793,30 @@ def normalizar_nacionalidad(valor):
     """Gentilicio → país (sin tildes, case-insensitive). Vacío → 'Chile'."""
     if _vacio(valor):
         return NACION_POR_DEFECTO
-    pais = _INDICE_NACIONALIDAD.get(_normalizar_texto(valor))
-    return pais if pais else str(valor).strip()
+    normalizado = _normalizar_texto(valor)
+    # Si no está en el mapeo, igual se devuelve en minúscula y sin tilde
+    return _INDICE_NACIONALIDAD.get(normalizado, normalizado)
 
 
 # ───── Regla 3: ¿Es expatriado? ─────
 def calcular_expatriado(id_nacion):
-    """Se evalúa DESPUÉS de normalizar la nación: Chile → 'N', el resto → 'T'."""
-    return "N" if _normalizar_texto(id_nacion) == _normalizar_texto(NACION_POR_DEFECTO) else "T"
+    """Se evalúa DESPUÉS de normalizar la nación: chile → 'N', el resto → 'T'.
+
+    Compara contra el id ya normalizado (minúscula, sin tilde), así que sigue
+    funcionando tanto con 'Chile' como con 'chile'.
+    """
+    return "N" if _normalizar_texto(id_nacion) == NACION_POR_DEFECTO else "T"
 
 
 # ───── Regla 6: Banco ─────
 def normalizar_banco(valor):
-    """Mapea bancos conocidos; vacío o en ceros → 'NOBANCO'."""
+    """Mapea bancos conocidos; vacío o en ceros → 'nobanco'.
+
+    Los id de banco van en minúscula (estado, chile, falabella, bci, copeuch).
+    """
     if _vacio(valor) or _solo_ceros(valor):
         return BANCO_SIN_DEFINIR
-    return _INDICE_BANCO.get(_normalizar_texto(valor), str(valor).strip())
+    return _INDICE_BANCO.get(_normalizar_texto(valor), str(valor).strip().lower())
 
 
 # ───── Reglas 7 y 8: Institución de salud ─────
@@ -808,11 +881,18 @@ def clasificar_formato_monto(valor) -> str:
 
 # ───── Regla 10: ¿Jornada parcial? ─────
 def jornada_parcial_por_horas(horas):
-    """<= JORNADA_PARCIAL_MAX_HORAS → 'S'; > → 'N'. Sin horas → None (no se toca)."""
+    """<= JORNADA_PARCIAL_MAX_HORAS → 'S'; > → 'N'. Sin dato → None (no se toca).
+
+    Un 0 no significa jornada parcial: significa que el maestro no trae la
+    jornada. Se devuelve None para no marcar 'S' por error. El relleno de
+    Horas de trabajo semanales a 42 debe correr ANTES que esta regla.
+    """
     if _vacio(horas):
         return None
     numero, _ = parsear_monto(horas)
     if not isinstance(numero, (int, float)):
+        return None
+    if float(numero) <= 0:
         return None
     return "S" if float(numero) <= JORNADA_PARCIAL_MAX_HORAS else "N"
 
@@ -889,11 +969,14 @@ def procesar_archivo(uploaded_file):
         df["Id empleado"] = df["Id empleado"].apply(validar_corregir_id)
         correcciones["ids_corregidos"] = int((antes.fillna("") != df["Id empleado"].fillna("")).sum())
 
-    # ───── Centro de costo y sede (fijos) ─────
-    if "Id centro de costo" in df.columns:
-        df["Id centro de costo"] = "sinDefinir"
-    if "Id sede donde se desempeña" in df.columns:
-        df["Id sede donde se desempeña"] = "sinDefinir"
+    # ───── Centro de costo y sede ─────
+    # Solo se completan los vacíos: si el maestro ya trae un centro de costo
+    # válido (ADD, ADF, TWEST...) NO debe pisarse con 'sinDefinir'.
+    for campo in ["Id centro de costo", "Id sede donde se desempeña"]:
+        if campo in df.columns:
+            correcciones["valores_defecto_completados"] += _completar_vacios(
+                df, campo, "sinDefinir"
+            )
 
     # ───── Valores por defecto para campos vacíos ─────
     DEFAULTS_CAMPOS = {
@@ -918,14 +1001,29 @@ def procesar_archivo(uploaded_file):
             correcciones["fechas_normalizadas"] += int((antes.fillna("") != df[campo].fillna("")).sum())
 
     # ───── Dirección ─────
-    # Nombre Calle: limpieza especial (sin números, sin depto/bloque)
+    # Nombre Calle → se separa la altura y se escribe en Numero Calle.
+    # Antes se borraba el número del nombre sin guardarlo: se perdía el dato.
+    advertencias_direccion = {}
     if "Nombre Calle" in df.columns:
         antes = df["Nombre Calle"].copy()
-        df["Nombre Calle"] = df["Nombre Calle"].apply(limpiar_nombre_calle)
+        col_num = "Numero Calle" if "Numero Calle" in df.columns else None
+        df["Nombre Calle"] = df["Nombre Calle"].astype("object")
+        if col_num:
+            df[col_num] = df[col_num].astype("object")
+        for idx in df.index:
+            nombre, numero, adv = separar_calle_numero(
+                df.at[idx, "Nombre Calle"],
+                df.at[idx, col_num] if col_num else None,
+            )
+            df.at[idx, "Nombre Calle"] = nombre
+            if col_num and not _vacio(numero):
+                df.at[idx, col_num] = numero
+            if adv:
+                advertencias_direccion[idx] = adv
         correcciones["direcciones_limpiadas"] += int((antes.fillna("") != df["Nombre Calle"].fillna("")).sum())
 
-    # Numero Calle y Departamento: limpieza estándar
-    campos_direccion = ["Numero Calle", "Departamento"]
+    # Departamento: limpieza estándar. Numero Calle ya quedó resuelto arriba.
+    campos_direccion = ["Departamento"]
     for campo in campos_direccion:
         if campo in df.columns:
             antes = df[campo].copy()
@@ -1071,12 +1169,18 @@ def procesar_archivo(uploaded_file):
         df[col] = pd.Series(nuevos, index=df.index, dtype="object")
         _anotar_regla(f"9. {col} (parseo coma decimal)", col)
 
-    # 7-8) Si la institución de salud es Fonasa: monto en pesos → 0, monto UF → '%'
+    # 7-8) Si la institución de salud es Fonasa:
+    #      monto en pesos → 0, monto en UF → 0, y Moneda de la cotización → '%'.
+    #      El '%' es un código de MONEDA, no un monto: antes se escribía por
+    #      error en la columna de UF.
+    col_moneda = _buscar_columna(df, "Moneda de la cotización", "Moneda de la cotizacion")
     verificacion_fonasa = {}
     if col_salud:
         mask_fonasa = df[col_salud].apply(es_fonasa).astype(bool)
         verificacion_fonasa["filas_fonasa"] = int(mask_fonasa.sum())
-        for col, valor_fonasa, num in ((col_monto_pesos, 0, "7"), (col_monto_uf, "%", "8")):
+        for col, valor_fonasa, num in ((col_monto_pesos, 0, "7"),
+                                       (col_monto_uf, 0, "8"),
+                                       (col_moneda, "%", "8")):
             if col:
                 df[col] = df[col].astype("object")
                 distintos = mask_fonasa & (df[col] != valor_fonasa)
@@ -1255,6 +1359,10 @@ def procesar_archivo(uploaded_file):
                     _, _, valido = normalizar_telefono(v)
                     if not valido:
                         errores_fila.append(f"{campo} (valor: '{v}' no tiene formato válido)")
+
+        # Advertencias de dirección (altura no determinable / discrepancia)
+        if idx in advertencias_direccion:
+            errores_fila.append("OBSERVACIÓN: " + advertencias_direccion[idx])
 
         # ───── Validaciones entre fechas ─────
         f_nac   = _parsear_fecha(fila.get("Fecha de nacimiento"))
@@ -1532,19 +1640,29 @@ if archivo:
                     expanded=True,
                 ):
                     st.caption(
-                        "Valores que quedaron en las columnas de monto DESPUÉS de aplicar "
-                        "el override de Fonasa. La columna UF debe mostrar solo '%'."
+                        "Valores que quedaron DESPUÉS del override de Fonasa. "
+                        "Esperado: los dos montos en 0 y Moneda de la cotización en '%'."
                     )
+                    _total_fonasa = verif["filas_fonasa"]
                     for _col, _conteo in verif.items():
                         if _col == "filas_fonasa":
                             continue
-                        st.markdown(f"**{_col}**")
+                        _esperado = "%" if "moneda" in _normalizar_texto(_col) else "0"
+                        _ok = _conteo.get(_esperado, 0)
+                        st.markdown(f"**{_col}** — esperado `{_esperado}`")
                         st.dataframe(
                             pd.DataFrame(
                                 [{"Valor final": k, "Filas Fonasa": v} for k, v in _conteo.items()]
                             ),
                             use_container_width=True, hide_index=True,
                         )
+                        if _ok == _total_fonasa:
+                            st.success(f"✅ Las {_total_fonasa} filas Fonasa quedaron en `{_esperado}`.")
+                        else:
+                            st.error(
+                                f"❌ Solo {_ok} de {_total_fonasa} filas Fonasa quedaron en "
+                                f"`{_esperado}`. Revisar las {_total_fonasa - _ok} restantes."
+                            )
 
             # Detalle por regla nueva (separado de los defaults preexistentes)
             detalle = st.session_state.get("detalle_reglas") or {}
