@@ -295,73 +295,101 @@ def limpiar_direccion(valor):
 # Palabras que cortan la dirección: lo que viene después no es la calle.
 _CORTE_DIRECCION = r"\b(?:depto|dpto|depto\.?|departamento|bloque|block|blok)\b"
 
+# Marcador explícito de altura: '#450', '# 450', 'N°0283', 'N 42', 'Nº 42'.
+# El grupo captura los dígitos completos, ceros a la izquierda incluidos.
+_MARCADOR_ALTURA = r"(?:#|\bN\s*[°º])\s*(\d+)"
+
+# '0865' y '865' NO son la misma dirección en Chile: la altura con cero a la
+# izquierda identifica otro tramo de la calle. Se conserva tal cual.
+CONSERVAR_CEROS_IZQUIERDA = True
+
+
+def _numero_calle_valido(valor) -> bool:
+    """Un Numero Calle en ceros ('0', '00') no es un dato: cuenta como vacío."""
+    return not _vacio(valor) and not _solo_ceros(valor)
+
+
+def _limpiar_nombre(texto) -> str:
+    """Quita marcadores (#, °, º), la 'N' suelta de 'N°' y espacios sobrantes."""
+    texto = re.sub(r"[#°º]", " ", texto)
+    texto = re.sub(r"\b[Nn]\b", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def _formatear_altura(digitos) -> str:
+    """Normaliza la altura extraída. Nunca devuelve un número en ceros."""
+    if _solo_ceros(digitos):
+        return ""
+    if CONSERVAR_CEROS_IZQUIERDA:
+        return digitos
+    return digitos.lstrip("0") or ""
+
 
 def separar_calle_numero(nombre_crudo, numero_actual=None):
     """Separa 'REMBRANDT 571 VILLA LA ARBOLEDA' en nombre y altura.
 
-    Devuelve (nombre, numero, advertencia). Si el número no se puede
-    determinar con seguridad, NO se elimina del nombre y se devuelve una
-    advertencia, para no perder el dato.
+    Devuelve (nombre, numero, advertencia). El número devuelto es el valor
+    FINAL de Numero Calle: '' significa que no se pudo determinar, y nunca
+    se devuelve un número en ceros.
 
-    Reglas:
-    - Un número precedido por '#' o 'N°' es la altura, sin ambigüedad.
-    - Si no, se toma el último número que NO esté al inicio del texto: en
+    Reglas, en orden:
+    - Un número precedido por '#' o 'N°' es la altura, sin ambigüedad, aunque
+      venga pegado al marcador, con ceros a la izquierda y con texto después.
+    - Si no hay marcador, se toma el único número que no esté al inicio: en
       '4 ORIENTE 970' el 4 es parte del nombre y 970 es la altura.
-    - Un único número al inicio ('4 ORIENTE') es parte del nombre: ambiguo.
+    - Dos o más números sin marcador ('PASAJE 5 CASA 12') → ambiguo.
+    - Un único número al inicio ('4 ORIENTE') es parte del nombre → ambiguo.
     """
-    if _vacio(nombre_crudo):
-        return nombre_crudo, numero_actual, None
+    # Un Numero Calle en ceros se trata como vacío: es lo que trae el maestro
+    # cuando el dato no existe, y antes bloqueaba la extracción.
+    existente = str(numero_actual).strip() if _numero_calle_valido(numero_actual) else ""
 
-    texto = str(nombre_crudo).strip()
+    if _vacio(nombre_crudo):
+        return nombre_crudo, existente, None
+
+    original = str(nombre_crudo).strip()
     # Cortar desde depto/bloque en adelante (esa parte no es calle ni altura)
-    texto = re.split(_CORTE_DIRECCION, texto, flags=re.IGNORECASE)[0]
-    # Limpiar separadores, conservando '#' y 'º/°' para detectar la altura
+    texto = re.split(_CORTE_DIRECCION, original, flags=re.IGNORECASE)[0]
+    # Limpiar separadores, conservando '#' y '°/º' para detectar la altura
     texto = re.sub(r"[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9#°º ]", " ", texto)
     texto = re.sub(r"\s+", " ", texto).strip()
 
-    # 1) Altura explícita: '#600', 'N° 600'
-    m = re.search(r"(?:#|\bN\s*[°º]?\s*)\s*(\d+)", texto, flags=re.IGNORECASE)
+    patron, adv = None, None
+
+    # 1) Altura explícita con marcador
+    m = re.search(_MARCADOR_ALTURA, texto, flags=re.IGNORECASE)
     if m:
-        numero = m.group(1)
-        nombre = (texto[:m.start()] + " " + texto[m.end():])
+        numero = _formatear_altura(m.group(1))
+        nombre = _limpiar_nombre(texto[:m.start()] + " " + texto[m.end():])
+        if not numero:
+            return _limpiar_nombre(texto), existente, (
+                f"Altura en ceros tras el marcador en Nombre Calle ('{original}'): "
+                f"se dejó Numero Calle vacío")
     else:
-        # 2) Último número que no esté al inicio del texto
+        # 2) Número suelto que no esté al inicio del texto
         candidatos = [x for x in re.finditer(r"\b\d+\b", texto) if x.start() > 0]
         if len(candidatos) > 1:
-            # Dos o más números y ninguna marca explícita de altura:
-            # 'PASAJE 5 CASA 12', 'LOTE 3 SITIO 40'. No se puede decidir cuál
-            # es la altura sin riesgo de mutilar el nombre → se deja intacto.
-            nombre = re.sub(r"\s+", " ", texto.replace("#", " ")).strip()
-            adv = None
-            if _vacio(numero_actual):
-                adv = (f"Nombre Calle con {len(candidatos)} números y sin '#'/'N°' "
-                       f"('{str(nombre_crudo).strip()}'): no se pudo determinar cuál es "
-                       f"la altura, se dejó el nombre sin modificar")
-            return nombre, numero_actual, adv
-        if not candidatos:
-            # Sin número, o un único número al inicio → ambiguo: no tocar
-            nombre = re.sub(r"\s+", " ", texto.replace("#", " ")).strip()
-            hay_digito = bool(re.search(r"\d", texto))
-            adv = None
-            if hay_digito and _vacio(numero_actual):
+            patron = "Dos o más números sin marcador"
+            adv = (f"Nombre Calle con {len(candidatos)} números y sin '#'/'N°' "
+                   f"('{original}'): no se pudo determinar cuál es la altura, "
+                   f"se dejó el nombre sin modificar")
+        elif not candidatos:
+            if re.search(r"\d", texto):
+                patron = "Único número al inicio del nombre"
                 adv = (f"Numero Calle vacío y no se pudo determinar la altura en "
-                       f"Nombre Calle ('{str(nombre_crudo).strip()}'): se dejó el número en el nombre")
-            return nombre, numero_actual, adv
+                       f"Nombre Calle ('{original}'): se dejó el número en el nombre")
+        if adv or not candidatos:
+            return _limpiar_nombre(texto), existente, (adv, patron) if adv else None
         m = candidatos[-1]
-        numero = m.group(0)
-        nombre = (texto[:m.start()] + " " + texto[m.end():])
+        numero = _formatear_altura(m.group(0))
+        nombre = _limpiar_nombre(texto[:m.start()] + " " + texto[m.end():])
 
-    nombre = re.sub(r"[#°º]", " ", nombre)
-    nombre = re.sub(r"\b[Nn]\b", " ", nombre)          # 'N' suelta de 'N°'
-    nombre = re.sub(r"\s+", " ", nombre).strip()
-
-    # Si Numero Calle ya trae un dato distinto, no lo pisamos: avisamos
-    if not _vacio(numero_actual):
-        if str(numero_actual).strip() == numero:
-            return nombre, numero_actual, None
-        return (str(nombre_crudo).strip(), numero_actual,
-                f"Nombre Calle contiene '{numero}' pero Numero Calle dice "
-                f"'{str(numero_actual).strip()}': se dejó el nombre sin modificar")
+    # Si Numero Calle ya trae un dato válido y distinto, no lo pisamos: avisamos
+    if existente and existente != numero:
+        return original, existente, (
+            f"Nombre Calle contiene '{numero}' pero Numero Calle dice "
+            f"'{existente}': se dejó el nombre sin modificar",
+            "Discrepancia con Numero Calle")
 
     return nombre, numero, None
 
@@ -1028,14 +1056,17 @@ def procesar_archivo(uploaded_file):
                 df.at[idx, col_num] if col_num else None,
             )
             df.at[idx, "Nombre Calle"] = nombre
-            if col_num and not _vacio(numero):
-                df.at[idx, col_num] = numero
+            if col_num:
+                # Se asigna siempre: '' limpia los ceros que traía el maestro
+                df.at[idx, col_num] = numero if not _vacio(numero) else ""
             if adv:
-                advertencias_direccion[idx] = adv
+                texto_adv, patron = adv if isinstance(adv, tuple) else (adv, "Otro")
+                advertencias_direccion[idx] = texto_adv
                 direcciones_ambiguas.append({
                     "fila":     int(idx) + fila_header + 2,
                     "original": str(antes.at[idx]).strip(),
-                    "motivo":   adv,
+                    "patron":   patron or "Otro",
+                    "motivo":   texto_adv,
                 })
         correcciones["direcciones_limpiadas"] += int((antes.fillna("") != df["Nombre Calle"].fillna("")).sum())
 
@@ -1663,10 +1694,23 @@ if archivo:
                         "Sirven para ajustar la heurística: formatos como "
                         "'PASAJE 5 CASA 12' o 'LOTE 3 SITIO 40' traen dos números legítimos."
                     )
+                    st.markdown("**Resumen por patrón**")
+                    _grupos = {}
+                    for _a in ambiguas:
+                        _grupos.setdefault(_a.get("patron", "Otro"), []).append(_a)
                     st.dataframe(
                         pd.DataFrame([
-                            {"Fila Excel": a["fila"], "Nombre Calle original": a["original"],
-                             "Motivo": a["motivo"]}
+                            {"Patrón": _p, "Filas": len(_items),
+                             "Ejemplos": " · ".join(x["original"][:40] for x in _items[:3])}
+                            for _p, _items in sorted(_grupos.items(), key=lambda kv: -len(kv[1]))
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.markdown("**Listado completo**")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Fila Excel": a["fila"], "Patrón": a.get("patron", "Otro"),
+                             "Nombre Calle original": a["original"]}
                             for a in ambiguas
                         ]),
                         use_container_width=True, hide_index=True,
