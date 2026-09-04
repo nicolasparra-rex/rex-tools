@@ -327,6 +327,17 @@ def separar_calle_numero(nombre_crudo, numero_actual=None):
     else:
         # 2) Último número que no esté al inicio del texto
         candidatos = [x for x in re.finditer(r"\b\d+\b", texto) if x.start() > 0]
+        if len(candidatos) > 1:
+            # Dos o más números y ninguna marca explícita de altura:
+            # 'PASAJE 5 CASA 12', 'LOTE 3 SITIO 40'. No se puede decidir cuál
+            # es la altura sin riesgo de mutilar el nombre → se deja intacto.
+            nombre = re.sub(r"\s+", " ", texto.replace("#", " ")).strip()
+            adv = None
+            if _vacio(numero_actual):
+                adv = (f"Nombre Calle con {len(candidatos)} números y sin '#'/'N°' "
+                       f"('{str(nombre_crudo).strip()}'): no se pudo determinar cuál es "
+                       f"la altura, se dejó el nombre sin modificar")
+            return nombre, numero_actual, adv
         if not candidatos:
             # Sin número, o un único número al inicio → ambiguo: no tocar
             nombre = re.sub(r"\s+", " ", texto.replace("#", " ")).strip()
@@ -1004,6 +1015,7 @@ def procesar_archivo(uploaded_file):
     # Nombre Calle → se separa la altura y se escribe en Numero Calle.
     # Antes se borraba el número del nombre sin guardarlo: se perdía el dato.
     advertencias_direccion = {}
+    direcciones_ambiguas = []
     if "Nombre Calle" in df.columns:
         antes = df["Nombre Calle"].copy()
         col_num = "Numero Calle" if "Numero Calle" in df.columns else None
@@ -1020,6 +1032,11 @@ def procesar_archivo(uploaded_file):
                 df.at[idx, col_num] = numero
             if adv:
                 advertencias_direccion[idx] = adv
+                direcciones_ambiguas.append({
+                    "fila":     int(idx) + fila_header + 2,
+                    "original": str(antes.at[idx]).strip(),
+                    "motivo":   adv,
+                })
         correcciones["direcciones_limpiadas"] += int((antes.fillna("") != df["Nombre Calle"].fillna("")).sum())
 
     # Departamento: limpieza estándar. Numero Calle ya quedó resuelto arriba.
@@ -1250,6 +1267,7 @@ def procesar_archivo(uploaded_file):
 
     # Paneles permanentes: se reescriben en cada carga para no arrastrar
     # resultados del archivo anterior en la misma sesión.
+    st.session_state["direcciones_ambiguas"] = direcciones_ambiguas
     st.session_state["diagnostico_maestro"] = diagnostico
     st.session_state["detalle_reglas"] = detalle_reglas
     st.session_state["verificacion_fonasa"] = verificacion_fonasa
@@ -1631,6 +1649,28 @@ if archivo:
                     lineas += ["", f"TOTAL cambios reales: {total_cambios}"]
                     st.caption("Resumen copiable (solo conteos, sin datos personales):")
                     st.code("\n".join(lineas), language="text")
+
+            # Direcciones que no se pudieron separar con seguridad
+            ambiguas = st.session_state.get("direcciones_ambiguas") or []
+            if ambiguas:
+                with st.expander(
+                    f"📍 Direcciones ambiguas ({len(ambiguas)}) — el número se dejó en Nombre Calle",
+                    expanded=True,
+                ):
+                    st.caption(
+                        "En estas filas no se pudo determinar la altura con seguridad, "
+                        "así que NO se modificó el nombre ni se escribió Numero Calle. "
+                        "Sirven para ajustar la heurística: formatos como "
+                        "'PASAJE 5 CASA 12' o 'LOTE 3 SITIO 40' traen dos números legítimos."
+                    )
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Fila Excel": a["fila"], "Nombre Calle original": a["original"],
+                             "Motivo": a["motivo"]}
+                            for a in ambiguas
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
 
             # Verificación post-proceso de las reglas 7 y 8 (Fonasa)
             verif = st.session_state.get("verificacion_fonasa") or {}
