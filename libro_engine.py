@@ -712,16 +712,22 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         idsal_res = resolver_inst(sal, homolog, {"is"}) if homolog else None
         idsal = idsal_res or (norm(sal).replace("_", "").replace(" ", "") if sal else 0)
         _reg_inst("is", sal, idsal_res)
-        cot_afp = _num(cot_hist.get(f"{periodo}{idafp}", 0)) * 100
         liq = _num(row[sidx("liquido")]) if sidx("liquido") is not None else 0
         sums = {cid: sum(_num(row[i]) for i in cols) for cid, cols in id_cols.items()}
         rebajas = sums.get("afp", 0) + sums.get("isapre", 0) + sums.get("cesEmpleado", 0)
+        afp_m = sums.get("afp", 0); sis_m = sums.get("sis", 0)
         # Renta imponible AFP: del libro si viene; si NO (el libro no la trae), se DERIVA del monto de una
         # cotización que sea % puro del imponible (AFP ÷ tasa, o SIS ÷ tasa). No afecta la cuadratura
         # (que va por montos); solo alimenta la columna "Afecto". Se avisa para revisar.
         base_afp = _num(row[sidx("base_afp")]) if sidx("base_afp") is not None else 0
+        # Tasa AFP (col Cotizacion): se DERIVA del libro (monto AFP / imponible topeado) = tasa real del
+        # periodo. Solo si el libro no trae monto+imponible se cae al historico cot_afp_hist. Asi no hay
+        # que mantener la tabla mes a mes.
+        if base_afp > 0 and afp_m > 0:
+            cot_afp = round(afp_m / _tope(base_afp, tope_afp) * 100, 2)
+        else:
+            cot_afp = _num(cot_hist.get(f"{periodo}{idafp}", 0)) * 100
         if base_afp <= 0:
-            afp_m = sums.get("afp", 0); sis_m = sums.get("sis", 0)
             if afp_m > 0 and cot_afp > 0:
                 base_afp = round(afp_m / (cot_afp / 100.0))
                 flags.add("El libro no trae la renta imponible: se derivó del AFP (monto ÷ tasa) — revisar con el consultor.")
@@ -750,7 +756,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             if cid == "afp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afp, grp=g)
             elif cid == "isapre":
                 # AFECTO topeado al tope imponible AFP (mismo techo que salud), fonasa e isapre por igual.
-                add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idsal, grp=g, p8=tope_salud)
+                add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idsal, cot=round(_tope(base_afp, tope_afp) * 0.07), grp=g, p8=tope_salud)
             elif cid == "cesEmpleado": add(cid, m, afecto=_tope(base_ces, tope_ces), inst=idafp, cot=0.6, grp=g)
             elif cid == "mutual": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
             elif cid == "sis": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=sis_pct, grp="aporte")
@@ -768,7 +774,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             elif cid == "aporteFAPPCEV": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_fappcev, grp="aporte")
             elif cid in INST_AFP_CONC: add(cid, m, inst=apv_inst, grp=g)
             elif cid in INST_CAJA_CONC: add(cid, m, inst=caja_e, grp=g)
-            elif cid == "cajaComp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=caja_e, grp=g)
+            elif cid == "cajaComp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=caja_e, grp="aporte")
             elif cid in RELIQ:
                 add(cid, m, afecto=base_afp, grp=("aporte" if cid in RELIQ_APO else "desc"))
                 if m:   # solo avisar si HAY reliquidación real: evita falsa alarma cuando la columna viene en 0
@@ -777,14 +783,14 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                 add(cid, m, init=((pactado or m) if cid == "sueldoBase" else 0), grp=g)
         # AFECTO del impuesto = base tributable del libro ('Monto Afecto a Impuesto'); si no viene, la imponible.
         # NO se resta lo legal (eso va aparte en la col 'Total de rebajas por LLSS').
-        trib = base_trib if base_trib else base_afp
+        trib = (base_trib + rebajas) if base_trib else base_afp
         # Rentas no gravadas = haberes NO GRAVADOS con impuesto = Total Haberes − base TRIBUTABLE.
         # Si el libro trae '* TOTAL HABERES NO IMPONIBLES *', se usa ese; si no, se calcula (TH − tributable).
         _thr = _num(row[sidx("total_haberes")]) if th_i is not None else 0
         if _noimp_i is not None and pd.notna(row[_noimp_i]):
             no_grav = _num(row[_noimp_i])
         else:
-            no_grav = max(_thr - trib, 0)
+            no_grav = max(_thr - base_afp, 0)
             if base_trib <= 0 and no_grav > 0:
                 flags.add("El libro no trae el total tributable ni los haberes no imponibles: 'Rentas no gravadas' "
                           "se estimó (total haberes − imponible) — revisar con el consultor.")
