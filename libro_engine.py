@@ -70,6 +70,8 @@ LEGAL_KW = [
     (("seguro", "cesantia", "trabajador"), "cesEmpleado"),
     (("patronal", "mutual"),           "mutual"),   # aporte mutual empleador (no confundir con ley 21227)
     (("empleador", "mutual"),          "mutual"),
+    (("cotizacion", "mutual"),         "mutual"),   # 'COTIZACION MUTUAL'
+    (("gratificacion",),               "gratificacion"),  # 'GRATIFICACIÓN DEL MES', 'Gratificación.-', etc.
 ]
 
 # CAJA DE COMPENSACIÓN (CCAF): regla de negocio — NO se diferencia por institución. Cualquier caja
@@ -99,20 +101,35 @@ def sugerir_caja(n, valid_ids):
     """Regla de caja (CCAF) con prioridad sobre el catálogo: colapsa cualquier caja al genérico por tipo."""
     return _match_kw(n, CAJA_KW, valid_ids)
 
-def sugerir_cesantia_empl(n, valid_ids):
-    """Aporte de cesantía del EMPLEADOR que viene AGRUPADO en 1 columna (no separado en Ci/Sol).
-    Devuelve el pseudo 'cesAporteEmpl' para que el motor lo divida en cesAporteCi + cesAporteSol
-    según tipo de contrato/antigüedad. Solo si el catálogo tiene ambos destinos de la división.
-    Si el libro YA lo trae separado (dice 'ci'/'solidario') no aplica: eso lo mapea el catálogo."""
+def sugerir_prev(n, valid_ids):
+    """Conceptos PREVISIONALES legales que los clientes nombran de mil formas (GENÉRICO):
+      - Seguro de cesantía / SEGURO DESEMPLEO (AFC): distingue empleador vs trabajador y CI/Solidario.
+          * empresa/empleador + individual/CI  -> cesAporteCi
+          * empresa/empleador + colectivo/solidario -> cesAporteSol
+          * empresa/empleador (sin especificar) -> cesAporteEmpl (el motor lo divide)
+          * sin empresa (trabajador)            -> cesEmpleado
+      - Cotización AFP del trabajador ('COT PREV NORMAL AFP', 'cotización previsional') -> afp
+    Devuelve None si no aplica o si el ID destino no está en el catálogo (cesAporteEmpl es pseudo)."""
     toks = _tokens(n)
-    if "cesantia" not in toks: return None
-    if "trabajador" in toks: return None                                  # ese es del trabajador (cesEmpleado)
-    if any(t in toks for t in ("ci", "solidario", "sol")): return None    # ya viene separado
-    if any(t.startswith("reliquid") for t in toks): return None           # reliquidación
-    if not any(t in toks for t in ("empleador", "patronal")): return None
-    if valid_ids is not None and not ({"cesAporteCi", "cesAporteSol"} <= set(valid_ids)):
-        return None                                                       # sin destinos donde caer la división
-    return "cesAporteEmpl"
+    if any(t.startswith("reliquid") for t in toks): return None
+    _in = lambda cid: (valid_ids is None) or (cid in valid_ids)
+    empresa = any(t in toks for t in ("empresa", "empleador", "empleadora", "patronal"))
+    # cesantía = seguro de desempleo. OJO: excluir "desempeño/desempeno" (bono de desempeño = HABER, no cesantía),
+    # que también empieza con "desemp"; se conserva "desempleo" y la abreviación "desemp".
+    es_ces = ("cesantia" in toks) or any(t.startswith("desemp") and not t.startswith("desempen") for t in toks)
+    if es_ces:
+        if empresa:
+            if any(t in toks for t in ("individual", "ci")) and _in("cesAporteCi"): return "cesAporteCi"
+            if any(t in toks for t in ("colectivo", "solidario", "sol")) and _in("cesAporteSol"): return "cesAporteSol"
+            if (valid_ids is None) or ({"cesAporteCi", "cesAporteSol"} <= set(valid_ids)): return "cesAporteEmpl"
+            return None
+        return "cesEmpleado" if _in("cesEmpleado") else None                      # sin empresa = aporte del trabajador
+    # Cotización AFP OBLIGATORIA del trabajador (no la institución, no el aporte empleador, no la voluntaria/APV)
+    if ("afp" in toks) and any(t in toks for t in ("cotizacion", "cot", "prevision", "prev", "previsional")) \
+            and not empresa and not any(t.startswith("voluntar") for t in toks) \
+            and not any(t.startswith("ahorr") for t in toks) and _in("afp"):
+        return "afp"
+    return None
 
 # Palabras COMUNES/genéricas: no bastan para un match por similitud (aparecen en muchos conceptos).
 # Un match por similitud debe compartir al menos UNA palabra distintiva (no de esta lista).
@@ -177,10 +194,12 @@ STRUCT = {
  "dias_trab": ["dias trabajados","dias trab","dias trabajados.-"],
  "afp": ["fondo de cotizacion","afp","prevision"],
  "salud": ["fonasa/isapre","salud","isapre"],
- "base_afp": ["base imponible afp","imponible afp","imp. prev./salud","imponible","imponible topeado",
+ "base_afp": ["monto imponible","base imponible afp","imponible afp","imp. prev./salud","imponible","imponible topeado",
               "monto afecto a leyes sociales","afecto a leyes sociales","monto afecto leyes sociales"],
- "base_ces": ["base imponible cesantia","imponible cesantia","imp. cesantia","imponible seguro cesantia"],
- "base_trib": ["base tributable","tributable","afecto impuesto","monto afecto a impuesto","afecto a impuesto"],
+ "base_ces": ["base imponible cesantia","imponible cesantia","imp. cesantia","imponible seguro cesantia",
+              "imponible para cotiz","imponible seg","imponible desempleo","imponible cotiz"],
+ "base_trib": ["total tributable","tributable final","base tributable","tributable","afecto impuesto",
+               "monto afecto a impuesto","afecto a impuesto"],
  "total_haberes": ["total haberes"],
  "total_descuentos": ["total descuentos"],
  "total_aportes": ["total aportes"],
@@ -191,7 +210,7 @@ STRUCT = {
                     "sueldo base contrato","sueldo base contractual","sueldo contrato","sueldo base de contrato"],
  "fecha_ingreso": ["fecha de ingreso","fecha ingreso compania","fecha ingreso","fecha de alta","inicio contrato"],
 }
-IGNORAR = {"sueldo","plan uf","fecha de baja","departamento","tipo de empleado","id centro de costo",
+IGNORAR = {"plan uf","fecha de baja","departamento","tipo de empleado","id centro de costo",
  "nombre c. costo","area","sede","workday - grade","grade","periodo","empleado","workday - nombre",
  "workday - role","workday - id","workday - centro de costo - codigo","workday - centro de costo - descripcion",
  "workday - centro de costo -\ndescripcion","nombre","centro de costo","cargo","categoria",
@@ -250,10 +269,12 @@ CONCEPTO = {
 
 RUT_TOKENS = ["numero de documento","rut trabajador","rut del trabajador","n de documento","rut","n documento"]
 INST_AFP_CONC = {"apvi","apvc","apviConvenido","afpAhor"}
-INST_CAJA_CONC = {"cajaCred","cajaLeas","cajaVida"}
+INST_CAJA_CONC = {"cajaCred","cajaLeas","cajaVida","cajaDent","cajaSegu","cajaAhor"}  # todos los conceptos CCAF llevan la caja
 RELIQ = {"reliquidaAfp","reliquidaIsapre","reliquidaCesEmpl","reliquidaImpuesto","reliquidaSis",
-         "reliquidaMutual","reliquidaCesCi","reliquidaCesSol","reliquidaAporteAFP","reliquidaAporteCEV"}
-RELIQ_APO = {"reliquidaSis","reliquidaMutual","reliquidaCesCi","reliquidaCesSol","reliquidaAporteAFP","reliquidaAporteCEV"}
+         "reliquidaMutual","reliquidaCesCi","reliquidaCesSol","reliquidaAporteAFP","reliquidaAporteCEV",
+         "reliquidaCcaf","reliquidaTrabPesa","reliquidaTrabEmpl","reliquidaAporteBAC"}
+RELIQ_APO = {"reliquidaSis","reliquidaMutual","reliquidaCesCi","reliquidaCesSol","reliquidaAporteAFP",
+             "reliquidaAporteCEV","reliquidaTrabEmpl","reliquidaAporteBAC"}   # aportes del empleador
 APORTES = {"mutual","sis","cesAporteCi","cesAporteSol","aporteAFPemp","aporteFAPPCEV"}
 
 # ---------- Homologación de instituciones (match exacto -> "like") ----------
@@ -345,6 +366,7 @@ def cargar_dotacion(path_or_file):
     cpm = col(["% mutual","cotizacionmutu","cotizacion mutual"], 8)
     cca = col(["caja","ccaf","cod caja","codigo caja","idcaja","id caja"], -1)
     ctc = col(["tipocont","tipo contrato","tipo de contrato","tipo cont"], -1)
+    cft = col(["fechaterm","fecha termino","fecha término","fecha fin","fecha de termino","fecha de término"], -1)
     out = {}
     for _, row in df.iloc[hr+1:].iterrows():
         idv = row[ci] if ci < len(row) else None
@@ -352,9 +374,12 @@ def cargar_dotacion(path_or_file):
         rut = str(idv).replace(".", "").strip().upper()
         try: fi = pd.to_datetime(row[cf], dayfirst=True) if (cf < len(row) and not pd.isna(row[cf])) else None
         except Exception: fi = None
+        try: ft = pd.to_datetime(row[cft], dayfirst=True) if (0 <= cft < len(row) and not pd.isna(row[cft])) else None
+        except Exception: ft = None
         out.setdefault(rut, []).append({
             "contrato": row[cc] if (cc < len(row) and not pd.isna(row[cc])) else 1,
             "fechaInic": fi,
+            "fechaTerm": ft,
             "empresa": str(row[cemp]).strip() if (cemp < len(row) and not pd.isna(row[cemp])) else "",
             "mutual": str(row[cmut]).strip() if (cmut < len(row) and not pd.isna(row[cmut])) else "",
             "pmutual": row[cpm] if (cpm < len(row) and not pd.isna(row[cpm])) else "",
@@ -373,6 +398,15 @@ def resolver_contrato(rut, fecha_ing, periodo, dot):
     rows = dot.get(rut)
     if not rows:
         return _ret({}, False, "RUT no está en la dotación")
+    # Excluir contratos ya TERMINADOS antes del período (fechaTerm < primer día del mes). Evita elegir
+    # un contrato finiquitado (ej. plazo fijo cerrado) cuando hay otro vigente con la misma fechaInic.
+    try:
+        _y, _m = map(int, str(periodo).split("-")[:2])
+        _ini = pd.Timestamp(_y, _m, 1)
+        _vig = [r for r in rows if not r.get("fechaTerm") or pd.to_datetime(r["fechaTerm"]) >= _ini]
+        if _vig: rows = _vig
+    except Exception:
+        pass
     if len(rows) == 1:
         return _ret(rows[0], True, "")
     # varios contratos: match por fecha de ingreso exacta
@@ -540,8 +574,8 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
                     if c == "__SOBREGIRO__": c = "compensaSobre" if grupo == "haber" else "sobregiro_anterior"
                     if c == "__ISAPRE_AD__": c = "isapre"
                     if _ok(c): cid, fuente, conf = c, "aprox-diccionario", "revisar"; break
-        if cid is None:                                            # cesantía empleador AGRUPADA -> pseudo que DIVIDE
-            _ce = sugerir_cesantia_empl(n, valid_ids)             # cesAporteEmpl es pseudo: no pasa por _ok
+        if cid is None:                                            # previsionales legales (AFC/cesantía, cotización AFP)
+            _ce = sugerir_prev(n, valid_ids)                      # cesAporteEmpl es pseudo: no pasa por _ok
             if _ce is not None:
                 cid, fuente, conf = _ce, "regla-cesantia", "revisar"
         if cid is None:                                            # regla legal por palabra clave (APV, FALP, SIS, Ley 21735...)
@@ -557,6 +591,9 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
 
 # Pseudo-concepto: columna única de "AFC aporte empleador" que el motor DIVIDE en cesAporteSol + cesAporteCi.
 PSEUDO_IDS = {"cesAporteEmpl"}
+
+# Conceptos que Rex exige SIEMPRE por trabajador, aunque el monto sea 0 (con su definición completa).
+OBLIGATORIOS = {"sueldoBase", "afp", "isapre", "cesEmpleado", "impuesto", "totalesEmpl"}
 
 def dividir_afc(afc, tipo_cont, antiguedad):
     """Divide el aporte AFC del empleador en (solidario, individual) según tipo de contrato y antigüedad,
@@ -594,19 +631,31 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
     # que es el 7% del tope (monto máx. de cotización), no la base imponible.
     tope_salud = _num(params_row.get("topeImp_pesos_afp", 0)); sis_pct = _num(params_row.get("sis", 0))
     tope_ces = _num(params_row.get("topeCes_pesos", 0))
+    tope_afp = _num(params_row.get("topeImp_pesos_afp", 0))   # tope imponible AFP/salud/mutual/SIS/aportes empleador
+    cot_afpemp = _num(params_row.get("Aporte AFP", 0))        # % aporte empleador Capitalización Individual (Ley 21.735)
+    cot_fappcev = _num(params_row.get("Seg Social Exp vida", 0))  # % aporte empleador Expectativa de Vida (Ley 21.735)
+    def _tope(v, t): return min(v, t) if (t and v and v > t) else v
     if homolog:
         mut_id = resolver_inst(mut_id, homolog, {"mu"}) or mut_id
         caja_inst = resolver_inst(caja_inst, homolog, {"ca"}) or caja_inst
         apv_inst = resolver_inst(apv_inst, homolog, {"af"}) or apv_inst
     hdr = [x if str(x) != "nan" else "" for x in df.iloc[header_row].values]
     th_i = struct.get("total_haberes"); td_i = struct.get("total_descuentos")
+    # Subtotal de haberes NO IMPONIBLES del libro (para la col "Rentas no gravadas" del impuesto).
+    _noimp_i = next((i for i, h in enumerate(hdr)
+                     if h and norm(h).strip(" *·:.-") in ("total haberes no imponibles", "haberes no imponibles")), None)
     def sidx(k): return struct.get(k)
     _struct_idx = set(struct.values())   # columnas estructurales: NO son conceptos aunque su nombre coincida
-    id_cols = OrderedDict()
+    # Columnas por id Rex. Ante columnas con MISMO nombre normalizado que caen al mismo id (ej. un libro que
+    # trae 'Sueldo' contractual y 'SUELDO' pagado, ambos norma 'sueldo'), NO se suman las dos (sería doble
+    # conteo); se conserva la ÚLTIMA aparición: el sueldo del bloque de haberes (proporcional pagado) va
+    # después de la referencia contractual, y es el que cuadra con Total Haberes en meses parciales.
+    _by_norm = OrderedDict()   # cid -> OrderedDict(norma -> col)
     for i, h in enumerate(hdr):
         if i in _struct_idx: continue
         cid = mapping.get(norm(h))
-        if cid: id_cols.setdefault(cid, []).append(i)
+        if cid: _by_norm.setdefault(cid, OrderedDict())[norm(h)] = i
+    id_cols = OrderedDict((cid, list(m.values())) for cid, m in _by_norm.items())
     def grp_of(cols):
         i = cols[0]
         if th_i is not None and i < th_i: return "haber"
@@ -684,11 +733,11 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         base_trib = _num(row[sidx("base_trib")]) if sidx("base_trib") is not None else 0
         pactado = _num(row[sidx("sueldo_pactado")]) if sidx("sueldo_pactado") is not None else 0
         emp_rows = []
-        def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc", p7=0, p8=0):
+        def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc", p7=0, p8=0, rng=0):
             # cot (% de cotización) redondeado a 4 decimales: evita basura de punto flotante en el CSV
-            # (ej. 11.45 que salía 11.450000000000001 tras el ×100).
+            # (ej. 11.45 que salía 11.450000000000001 tras el ×100). rng = Rentas no gravadas (col N, solo impuesto).
             emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, round(_num(cot), 4), 0, dt,
-                             "x", emp_e, round(reb), 0, 0, jornada, "", round(init), 1, round(p7), round(p8)]))
+                             "x", emp_e, round(reb), round(rng), 0, jornada, "", round(init), 1, round(p7), round(p8)]))
         for cid, cols in id_cols.items():
             if cid == "impuesto": continue
             # Sobregiro: concepto dependiente de la POSICIÓN del mes (haber = compensaSobre, descuento =
@@ -698,48 +747,73 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                 _cs = "compensaSobre" if _gs == "haber" else "sobregiro_anterior"
                 add(_cs, sums[cid], grp=("haber" if _gs == "haber" else "desc")); continue
             m = sums[cid]; g = (tipo_map or {}).get(cid) or grp_of(cols)
-            if cid == "afp": add(cid, m, afecto=base_afp, inst=idafp, cot=cot_afp, grp=g)
+            if cid == "afp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afp, grp=g)
             elif cid == "isapre":
-                af = base_afp if idsal == "fonasa" else (min(base_afp, tope_salud) if tope_salud else base_afp)
-                # parcial8 (isapre) = tope imponible del mes
-                add(cid, m, afecto=af, inst=idsal, grp=g, p8=tope_salud)
-            elif cid == "cesEmpleado": add(cid, m, afecto=base_ces, inst=idafp, cot=0.6, grp=g)
-            elif cid == "mutual": add(cid, m, afecto=base_afp, inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
-            elif cid == "sis": add(cid, m, afecto=base_afp, inst=idafp, cot=sis_pct, grp="aporte")
+                # AFECTO topeado al tope imponible AFP (mismo techo que salud), fonasa e isapre por igual.
+                add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idsal, grp=g, p8=tope_salud)
+            elif cid == "cesEmpleado": add(cid, m, afecto=_tope(base_ces, tope_ces), inst=idafp, cot=0.6, grp=g)
+            elif cid == "mutual": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
+            elif cid == "sis": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=sis_pct, grp="aporte")
             # AFC empleador en UNA sola columna → dividir en solidario + cuenta individual (como la LRE)
             elif cid == "cesAporteEmpl":
                 _sol, _ci, _sin = dividir_afc(m, tipo_cont_e, antig_e)
-                if _sol: add("cesAporteSol", _sol, afecto=base_ces, inst=idafp, grp="aporte", p8=base_afp)
-                if _ci:  add("cesAporteCi",  _ci,  afecto=base_ces, inst=idafp, grp="aporte")
+                if _sol: add("cesAporteSol", _sol, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=_tope(base_afp, tope_afp))
+                if _ci:  add("cesAporteCi",  _ci,  afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte")
                 if _sin and m > 0:
                     log_afc.append({"rut": rut, "motivo": "AFC a dividir pero el trabajador no tiene tipo de contrato en la dotación (no se dividió)"})
             # parcial8 (cesAporteSol) = imponible del mes (base del aporte solidario)
             elif cid in ("cesAporteCi", "cesAporteSol"):
-                add(cid, m, afecto=base_ces, inst=idafp, grp="aporte", p8=(base_afp if cid == "cesAporteSol" else 0))
-            elif cid == "aporteAFPemp": add(cid, m, afecto=base_afp, inst=idafp, cot=0.1, grp="aporte")
-            elif cid == "aporteFAPPCEV": add(cid, m, afecto=base_afp, inst=idafp, grp="aporte")
+                add(cid, m, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=(_tope(base_afp, tope_afp) if cid == "cesAporteSol" else 0))
+            elif cid == "aporteAFPemp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afpemp, grp="aporte")
+            elif cid == "aporteFAPPCEV": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_fappcev, grp="aporte")
             elif cid in INST_AFP_CONC: add(cid, m, inst=apv_inst, grp=g)
             elif cid in INST_CAJA_CONC: add(cid, m, inst=caja_e, grp=g)
-            elif cid == "cajaComp": add(cid, m, afecto=base_afp, inst=caja_e, grp=g)
+            elif cid == "cajaComp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=caja_e, grp=g)
             elif cid in RELIQ:
                 add(cid, m, afecto=base_afp, grp=("aporte" if cid in RELIQ_APO else "desc"))
-                flags.add("Reliquidación cargada como consolidado — revisar devengo (Fecha de aplicación por mes de origen)")
+                if m:   # solo avisar si HAY reliquidación real: evita falsa alarma cuando la columna viene en 0
+                    flags.add("Reliquidación cargada como consolidado — revisar devengo (Fecha de aplicación por mes de origen)")
             else:
                 add(cid, m, init=((pactado or m) if cid == "sueldoBase" else 0), grp=g)
-        trib = base_trib if base_trib else max(base_afp - rebajas, 0)
+        # AFECTO del impuesto = base tributable del libro ('Monto Afecto a Impuesto'); si no viene, la imponible.
+        # NO se resta lo legal (eso va aparte en la col 'Total de rebajas por LLSS').
+        trib = base_trib if base_trib else base_afp
+        # Rentas no gravadas = haberes NO GRAVADOS con impuesto = Total Haberes − base TRIBUTABLE.
+        # Si el libro trae '* TOTAL HABERES NO IMPONIBLES *', se usa ese; si no, se calcula (TH − tributable).
+        _thr = _num(row[sidx("total_haberes")]) if th_i is not None else 0
+        if _noimp_i is not None and pd.notna(row[_noimp_i]):
+            no_grav = _num(row[_noimp_i])
+        else:
+            no_grav = max(_thr - trib, 0)
+            if base_trib <= 0 and no_grav > 0:
+                flags.add("El libro no trae el total tributable ni los haberes no imponibles: 'Rentas no gravadas' "
+                          "se estimó (total haberes − imponible) — revisar con el consultor.")
         # parcial7 (impuesto) = total de rebajas por leyes sociales (mismo valor que la col 12)
-        add("impuesto", sums.get("impuesto", 0), afecto=trib, reb=rebajas, grp="desc", p7=rebajas)
-        add("totalesEmpl", liq, afecto=base_afp, grp="total")
+        add("impuesto", sums.get("impuesto", 0), afecto=trib, reb=rebajas, grp="desc", p7=rebajas, rng=no_grav)
+        # Conceptos OBLIGATORIOS: Rex los exige SIEMPRE por trabajador, aun en 0, con su definición
+        # completa (afecto/institución/%). Si el trabajador no los trajo (ej. licencia médica todo el mes)
+        # se agregan aquí en 0; los que ya vienen con monto NO se tocan.
+        _ya = {r[3] for _g, r in emp_rows}
+        if "sueldoBase" not in _ya:  add("sueldoBase", 0, init=pactado, grp="haber")
+        if "afp" not in _ya:         add("afp", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afp, grp="desc")
+        if "isapre" not in _ya:      add("isapre", 0, afecto=_tope(base_afp, tope_afp), inst=idsal, grp="desc", p8=tope_salud)
+        if "cesEmpleado" not in _ya: add("cesEmpleado", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, cot=0.6, grp="desc")
+        # totalesEmpl: AFECTO = imponible del mes; Cotización = imponible topeado (PESOS, entero) al tope AFP.
+        add("totalesEmpl", liq, afecto=base_afp, cot=round(_tope(base_afp, tope_afp)), grp="total")
         H = sum(r[4] for g, r in emp_rows if g == "haber")
         D = sum(r[4] for g, r in emp_rows if g == "desc")
         T = next((r[4] for g, r in emp_rows if g == "total"), 0)
         TH = _num(row[sidx("total_haberes")]) if th_i is not None else H
         TD = _num(row[sidx("total_descuentos")]) if td_i is not None else D
-        _dh = round(H - TH); _dd = round(D - TD); _dl = round((H - D) - liq)
+        # El 'Total Descuentos' del libro puede venir en NEGATIVO (convención de algunos libros: los
+        # descuentos restan). El motor los suma en positivo, así que se comparan MAGNITUDES para no
+        # marcar un falso descuadre de ~2× por diferencia de signo. El líquido va aparte (H − D).
+        _dd_abs = abs(D) - abs(TD)
+        _dh = round(H - TH); _dd = round(_dd_abs); _dl = round((H - D) - liq)
         if abs(H - TH) > 2: bh += 1
-        if abs(D - TD) > 2: bd += 1
+        if abs(_dd_abs) > 2: bd += 1
         if abs((H - D) - liq) > 2: bt += 1   # líquido = haberes − descuentos (los aportes no cuentan)
-        if abs(H - TH) > 2 or abs((H - D) - liq) > 2 or (td_i is not None and abs(D - TD) > 2):
+        if abs(H - TH) > 2 or abs((H - D) - liq) > 2 or (td_i is not None and abs(_dd_abs) > 2):
             _nom = str(row[sidx("nombre")]).strip() if (sidx("nombre") is not None and pd.notna(row[sidx("nombre")])) else ""
             _dias = int(dt) if isinstance(dt, (int, float)) else 0
             descuadres.append({"rut": rut, "nombre": _nom, "dias_trab": _dias,
@@ -747,7 +821,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                                "liquido_generado": round(H - D), "liquido_libro": round(liq), "dif_liquido": _dl,
                                "dif_descuentos": (_dd if td_i is not None else None)})
         for g, r in emp_rows:
-            if r[3] == "impuesto" or _num(r[4]) != 0 or r[3] == "totalesEmpl":
+            if r[3] in OBLIGATORIOS or _num(r[4]) != 0:
                 filas.append(r)
     log_inst = [{"tipo": _ETIQ.get(cl, cl), "valor_libro": raw,
                  "id_rex": (res if res else ""), "estado": ("OK" if res else "SIN HOMOLOGAR")}
