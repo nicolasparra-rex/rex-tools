@@ -207,13 +207,16 @@ def leer_catalogo(file):
             if pd.notna(nom): names[norm(nom)] = str(cid).strip()
     return names, valid
 
-def to_csv(filas):
-    """Archivo de salida en CSV UTF-8 (con BOM, separador coma) — formato de carga a Rex."""
+def to_csv(filas, incluir_parciales=True):
+    """Archivo de salida en CSV UTF-8 (con BOM, separador coma) — formato de carga a Rex.
+    incluir_parciales=False omite las 2 últimas columnas (parcial7/parcial8), que Rex aún no usa."""
+    cols = OUT_COLS if incluir_parciales else OUT_COLS[:-2]
+    n = len(cols)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(OUT_COLS)
+    w.writerow(cols)
     for rr in filas:
-        w.writerow(rr)
+        w.writerow(rr[:n])
     return buf.getvalue().encode("utf-8-sig")
 
 # ---------- Barra lateral: se deja libre para el menú de las apps ----------
@@ -468,8 +471,10 @@ _disp_id.update(_PSEUDO)
 _id_de_disp = {v: k for k, v in _disp_id.items()}   # inverso: "ID - Nombre" -> ID
 _opciones_disp = [_disp_id[cid] for cid in valid_ids] + list(_PSEUDO.values())
 def _id_real(v):
-    """Del valor mostrado en el desplegable devuelve el ID (acepta 'ID - Nombre' o el ID pelado)."""
+    """Del valor mostrado en el desplegable devuelve el ID (acepta 'ID - Nombre' o el ID pelado).
+    Una celda sin elegir vuelve del data_editor como NaN/None -> str() daría 'nan'/'None'; se normaliza a ''."""
     v = str(v).strip()
+    if v == "" or v.lower() in ("nan", "none"): return ""
     return _id_de_disp.get(v, v)
 
 def _info(cid):
@@ -617,14 +622,15 @@ editor = st.data_editor(
 def _omitida(r): return bool(r.get("Omitir", False))
 
 # Rellena las métricas EN VIVO con lo que quedó en el editor (se actualizan al asignar u omitir).
+# OJO: una celda de ID sin elegir vuelve como NaN/None; _id_real la normaliza a "" (no confundir con 'nan').
 _e_omit = editor["Omitir"].astype(bool)
-_e_hasid = editor["ID Rex"].astype(str).str.strip() != ""
+_e_hasid = editor["ID Rex"].map(lambda v: _id_real(v) != "")
 _ph1.metric("Con datos a mapear", int((~_e_omit).sum()))
 _ph2.metric("Asociados", int((_e_hasid & ~_e_omit).sum()))
 _ph3.metric("Por asociar", int((~_e_hasid & ~_e_omit).sum()))
 
 mapping = {norm(r["Columna del libro"]): _id_real(r["ID Rex"])
-           for _, r in editor.iterrows() if str(r["ID Rex"]).strip() and not _omitida(r)}
+           for _, r in editor.iterrows() if _id_real(r["ID Rex"]) and not _omitida(r)}
 # tipo_map = el bloque que quedó en la tabla (catálogo, posición o el override del implementador)
 tipo_map = {}
 for _, r in editor.iterrows():
@@ -633,7 +639,7 @@ for _, r in editor.iterrows():
     if cid and bl in ("haber", "desc", "aporte"): tipo_map[cid] = bl
 invalidos = sorted(v for v in set(mapping.values()) if v not in by_id and v not in _PSEUDO)
 # Pendientes: sin ID y NO omitidas (las omitidas no bloquean).
-pend_df = editor[(editor["ID Rex"].astype(str).str.strip() == "") & (~editor["Omitir"].astype(bool))][["Columna del libro", "Bloque"]]
+pend_df = editor[editor["ID Rex"].map(lambda v: _id_real(v) == "") & (~editor["Omitir"].astype(bool))][["Columna del libro", "Bloque"]]
 
 # Aviso GENERAL (no atado a ningún concepto puntual): dónde el catálogo y el libro difieren en el bloque.
 conflictos = []
@@ -784,21 +790,24 @@ if st.button(_btn, type="primary", disabled=not listo, use_container_width=True)
         st.warning("🟠 " + f)
 
     # --- Descargas ---
+    _incl_parc = st.checkbox("Incluir columnas parcial7 y parcial8", value=False,
+                             help="Rex aún no usa estas 2 columnas. Déjalo desmarcado para un archivo "
+                                  "compatible con la carga actual; márcalo solo si las necesitas.")
     if len(resultados) == 1:
         r = resultados[0]
-        st.download_button("⬇️ Descargar migración detalle (.csv)", to_csv(r["filas"]),
+        st.download_button("⬇️ Descargar migración detalle (.csv)", to_csv(r["filas"], _incl_parc),
                            file_name=f"migracion_detalle_{r['periodo']}.csv", mime="text/csv", type="primary")
     else:
         _zbuf = io.BytesIO()
         with zipfile.ZipFile(_zbuf, "w", zipfile.ZIP_DEFLATED) as z:
             for r in resultados:
-                z.writestr(f"migracion_detalle_{r['periodo']}.csv", to_csv(r["filas"]))
+                z.writestr(f"migracion_detalle_{r['periodo']}.csv", to_csv(r["filas"], _incl_parc))
         st.download_button(f"⬇️ Descargar {len(resultados)} archivos (.zip)", _zbuf.getvalue(),
                            file_name=f"migracion_detalle_{len(resultados)}meses.zip",
                            mime="application/zip", type="primary")
         with st.expander("Descargar por mes"):
             for r in resultados:
-                st.download_button(f"⬇️ {r['periodo']}.csv", to_csv(r["filas"]),
+                st.download_button(f"⬇️ {r['periodo']}.csv", to_csv(r["filas"], _incl_parc),
                                    file_name=f"migracion_detalle_{r['periodo']}.csv",
                                    mime="text/csv", key=f"dl_{r['periodo']}")
 
