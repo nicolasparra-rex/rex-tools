@@ -192,6 +192,8 @@ STRUCT = {
  "rut": ["numero de documento","rut trabajador","rut del trabajador","rut","n de documento","n documento"],
  "nombre": ["nombre completo","nombre","apellido y nombre","nombre trabajador"],
  "dias_trab": ["dias trabajados","dias trab","dias trabajados.-"],
+ "dias_lic": ["dias de licencia","dias licencia","dias de licencias","dias licencias","dias de lic"],
+ "contrato": ["numero contrato","numero de contrato","num contrato","nro contrato","n contrato","contrato"],
  "afp": ["fondo de cotizacion","afp","prevision"],
  "salud": ["fonasa/isapre","salud","isapre"],
  "base_afp": ["monto imponible","base imponible afp","imponible afp","imp. prev./salud","imponible","imponible topeado",
@@ -593,25 +595,39 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
 PSEUDO_IDS = {"cesAporteEmpl"}
 
 # Conceptos que Rex exige SIEMPRE por trabajador, aunque el monto sea 0 (con su definición completa).
-OBLIGATORIOS = {"sueldoBase", "afp", "isapre", "cesEmpleado", "impuesto", "totalesEmpl"}
+OBLIGATORIOS = {"sueldoBase", "afp", "isapre", "cesEmpleado", "impuesto", "totalesEmpl",
+                "mutual", "sis", "aporteAFPemp", "aporteFAPPCEV", "cesAporteCi", "cesAporteSol"}
 
-def dividir_afc(afc, tipo_cont, antiguedad):
-    """Divide el aporte AFC del empleador en (solidario, individual) según tipo de contrato y antigüedad,
-    misma lógica que la Migración Historia LRE (page 5). Devuelve (sol, ci, sin_tipo)."""
+def dividir_afc(afc, tipo_cont, antiguedad, imponible=0):
+    """Divide el aporte AFC del empleador en (solidario, individual) según tipo de contrato y antigüedad.
+    Si NO viene el tipo de contrato, lo INFIERE por la tasa del aporte (afc / imponible): ~3% plazo fijo,
+    ~2,4% indefinido, ~0,8% indefinido >11 años. Devuelve (sol, ci, info): info=None si se dividió normal;
+    texto si se infirió el tipo o si no se pudo dividir."""
     afc = _num(afc); tc = (tipo_cont or "").strip().upper()
     if afc <= 0:
-        return 0, 0, (tc == "")
+        return 0, 0, None
     ant = antiguedad if isinstance(antiguedad, (int, float)) else None
-    # Solidario
+    # Fallback: sin tipo de contrato -> inferir por la TASA legal más cercana
+    if tc == "" and not (ant is not None and ant > 132):
+        imp = _num(imponible)
+        if imp <= 0:
+            return 0, 0, "AFC a dividir pero falta el tipo de contrato y no hay imponible para inferir (no se dividió)"
+        rate = afc / imp * 100
+        t = sorted([(abs(rate - 0.8), "v"), (abs(rate - 2.4), "i"), (abs(rate - 3.0), "f")])[0][1]
+        if t == "v":
+            return round(afc), 0, "AFC sin tipo de contrato: inferido por tasa %.2f%% -> indefinido >11 años (todo solidario)" % rate
+        if t == "f":
+            return round(afc / 3 * 0.2), round(afc / 3 * 2.8), "AFC sin tipo de contrato: inferido por tasa %.2f%% -> plazo fijo/obra (0,2 sol + 2,8 CI)" % rate
+        return round(afc / 2.4 * 0.8), round(afc / 2.4 * 1.6), "AFC sin tipo de contrato: inferido por tasa %.2f%% -> indefinido (0,8 sol + 1,6 CI)" % rate
+    # Con tipo de contrato (o antigüedad > 132): lógica original
     if ant is not None and ant > 132:
-        sol = round(afc)                       # indefinido > 11 años: todo va a solidario
+        sol = round(afc)
     elif tc in ("O", "F"):
-        sol = round(afc / 3 * 0.2)             # plazo fijo/obra: 3% total, 0.2 solidario
+        sol = round(afc / 3 * 0.2)
     elif tc == "I":
-        sol = round(afc / 2.4 * 0.8)           # indefinido: 2.4% total, 0.8 solidario
+        sol = round(afc / 2.4 * 0.8)
     else:
         sol = 0
-    # Individual (cuenta individual)
     if tc == "I" and ant is not None and ant <= 132:
         ci = round(afc / 2.4 * 1.6)
     elif tc == "I" and ant is not None and ant >= 133:
@@ -620,9 +636,9 @@ def dividir_afc(afc, tipo_cont, antiguedad):
         ci = round(afc / 3 * 2.8)
     else:
         ci = 0
-    return sol, ci, (tc == "")
+    return sol, ci, None
 
-def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, config, homolog=None, dotacion=None, tipo_map=None):
+def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, config, homolog=None, dotacion=None, tipo_map=None, exento_ids=None):
     """mapping: {norm(header): id_rex}. Suma columnas del mismo id. Cuadra al peso."""
     periodo = config["periodo"]; emp_id = config.get("empresa_id", ""); mut_id = config.get("mutual_id", "")
     apv_inst = config.get("apv_inst", "afp"); caja_inst = config.get("caja_inst", "losandes")
@@ -676,6 +692,9 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if not rut or rut.lower() == "nan" or not rut[0].isdigit() or "total" in rut.lower(): continue
         # --- contrato/empresa/mutual por RUT (dotación) — primero, para poder OMITIR a quien no esté ---
         ncont_e, emp_e, mut_e, pmut_e, caja_e = ncont, emp_id, mut_id, None, caja_inst
+        # Nº de contrato: PRIMERA opción = columna del libro (si trae un entero >= 1); si no, dotación/default.
+        _ncont_libro = _num(row[sidx("contrato")]) if sidx("contrato") is not None else 0
+        if _ncont_libro and _ncont_libro >= 1: ncont_e = int(_ncont_libro)
         tipo_cont_e = ""; antig_e = None                  # para dividir/validar el aporte AFC
         if dotacion:
             fecha_ing = row[sidx("fecha_ingreso")] if sidx("fecha_ingreso") is not None else None
@@ -684,7 +703,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                 log_contratos.append({"rut": rut, "motivo": rc["motivo"]})
                 omitidos += 1
                 continue                                  # no está en la dotación -> se OMITE del archivo
-            if rc["contrato"] not in (None, ""): ncont_e = rc["contrato"]
+            if rc["contrato"] not in (None, "") and not (_ncont_libro and _ncont_libro >= 1): ncont_e = rc["contrato"]
             emp_e = rc["empresa"] or emp_id
             mut_e = rc["mutual"] or mut_id
             pmut_e = rc["pmutual"]
@@ -704,6 +723,11 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                 _cr = resolver_inst(caja_e, homolog, {"ca"}); _reg_inst("ca", caja_e, _cr); caja_e = _cr or caja_e
         empleados += 1
         dt = int(_num(row[sidx("dias_trab")])) if sidx("dias_trab") is not None else 30
+        # Días de licencia: si el libro trae la columna, van al campo "Días de licencias".
+        # Los días trabajados mandan; si trab + lic > 30, se topa la LICENCIA a (30 - trab). Sin aviso.
+        dl = int(_num(row[sidx("dias_lic")])) if sidx("dias_lic") is not None else 0
+        if dl < 0: dl = 0
+        if dt + dl > 30: dl = max(30 - dt, 0)
         afp_raw = (row[sidx("afp")] if sidx("afp") is not None and pd.notna(row[sidx("afp")]) else 0) or 0
         idafp_res = resolver_inst(afp_raw, homolog, {"af"}) if homolog else None
         idafp = idafp_res or afp_raw
@@ -742,7 +766,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         def add(cid, monto, afecto=0, inst=0, cot=0, init=0, reb=0, grp="desc", p7=0, p8=0, rng=0):
             # cot (% de cotización) redondeado a 4 decimales: evita basura de punto flotante en el CSV
             # (ej. 11.45 que salía 11.450000000000001 tras el ×100). rng = Rentas no gravadas (col N, solo impuesto).
-            emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, round(_num(cot), 4), 0, dt,
+            emp_rows.append((grp, [periodo, rut, ncont_e, cid, round(monto), round(afecto), inst, round(_num(cot), 4), dl, dt,
                              "x", emp_e, round(reb), round(rng), 0, jornada, "", round(init), 1, round(p7), round(p8)]))
         for cid, cols in id_cols.items():
             if cid == "impuesto": continue
@@ -762,11 +786,11 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             elif cid == "sis": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=sis_pct, grp="aporte")
             # AFC empleador en UNA sola columna → dividir en solidario + cuenta individual (como la LRE)
             elif cid == "cesAporteEmpl":
-                _sol, _ci, _sin = dividir_afc(m, tipo_cont_e, antig_e)
+                _sol, _ci, _info = dividir_afc(m, tipo_cont_e, antig_e, base_ces or base_afp)
                 if _sol: add("cesAporteSol", _sol, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=_tope(base_afp, tope_afp))
                 if _ci:  add("cesAporteCi",  _ci,  afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte")
-                if _sin and m > 0:
-                    log_afc.append({"rut": rut, "motivo": "AFC a dividir pero el trabajador no tiene tipo de contrato en la dotación (no se dividió)"})
+                if _info and m > 0:
+                    log_afc.append({"rut": rut, "motivo": _info})
             # parcial8 (cesAporteSol) = imponible del mes (base del aporte solidario)
             elif cid in ("cesAporteCi", "cesAporteSol"):
                 add(cid, m, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=(_tope(base_afp, tope_afp) if cid == "cesAporteSol" else 0))
@@ -784,6 +808,10 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         # AFECTO del impuesto = base tributable del libro ('Monto Afecto a Impuesto'); si no viene, la imponible.
         # NO se resta lo legal (eso va aparte en la col 'Total de rebajas por LLSS').
         trib = (base_trib + rebajas) if base_trib else base_afp
+        # Validación (aviso): el 'total tributable' del cliente vs el esperado (imponible − rebajas legales).
+        if base_trib and abs(base_trib - (base_afp - rebajas)) > 2:
+            flags.add("Hay trabajador(es) donde el 'total tributable' del libro no calza con (imponible − rebajas) — "
+                      "revisar: pueden ser haberes exentos/no imponibles, o un error de dato en el tributable.")
         # Rentas no gravadas = haberes NO GRAVADOS con impuesto = Total Haberes − base TRIBUTABLE.
         # Si el libro trae '* TOTAL HABERES NO IMPONIBLES *', se usa ese; si no, se calcula (TH − tributable).
         _thr = _num(row[sidx("total_haberes")]) if th_i is not None else 0
@@ -804,6 +832,13 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if "afp" not in _ya:         add("afp", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afp, grp="desc")
         if "isapre" not in _ya:      add("isapre", 0, afecto=_tope(base_afp, tope_afp), inst=idsal, grp="desc", p8=tope_salud)
         if "cesEmpleado" not in _ya: add("cesEmpleado", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, cot=0.6, grp="desc")
+        # Aportes del empleador reservados: Rex tambien los exige por trabajador aun en 0 (institucion = AFP del mes; mutual con su institucion).
+        if "mutual" not in _ya:        add("mutual", 0, afecto=_tope(base_afp, tope_afp), inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
+        if "sis" not in _ya:           add("sis", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=sis_pct, grp="aporte")
+        if "aporteAFPemp" not in _ya:  add("aporteAFPemp", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afpemp, grp="aporte")
+        if "aporteFAPPCEV" not in _ya: add("aporteFAPPCEV", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_fappcev, grp="aporte")
+        if "cesAporteCi" not in _ya:   add("cesAporteCi", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte")
+        if "cesAporteSol" not in _ya:  add("cesAporteSol", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=_tope(base_afp, tope_afp))
         # totalesEmpl: AFECTO = imponible del mes; Cotización = imponible topeado (PESOS, entero) al tope AFP.
         add("totalesEmpl", liq, afecto=base_afp, cot=round(_tope(base_afp, tope_afp)), grp="total")
         H = sum(r[4] for g, r in emp_rows if g == "haber")
@@ -826,7 +861,17 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                                "haberes_generado": round(H), "haberes_libro": round(TH), "dif_haberes": _dh,
                                "liquido_generado": round(H - D), "liquido_libro": round(liq), "dif_liquido": _dl,
                                "dif_descuentos": (_dd if td_i is not None else None)})
-        for g, r in emp_rows:
+        # Ordenamiento del archivo (lectura/QA): dentro de cada trabajador ->
+        # 1 haber imponible, 2 haber exento, 3 descuento legal, 4 otros descuentos, 5 líquido, 6 aportes.
+        # Orden ESTABLE dentro de cada categoría (se conserva el orden de origen).
+        _LEGAL_DESC = {"afp", "isapre", "cesEmpleado", "impuesto"}
+        _exe = exento_ids or set()
+        def _cat_rank(g, cid):
+            if g == "haber":  return 2 if cid in _exe else 1
+            if g == "total":  return 5          # líquido (totalesEmpl)
+            if g == "aporte": return 6
+            return 3 if cid in _LEGAL_DESC else 4   # desc: legal vs otros
+        for _idx, (g, r) in sorted(enumerate(emp_rows), key=lambda x: (_cat_rank(x[1][0], x[1][1][3]), x[0])):
             if r[3] in OBLIGATORIOS or _num(r[4]) != 0:
                 filas.append(r)
     log_inst = [{"tipo": _ETIQ.get(cl, cl), "valor_libro": raw,
