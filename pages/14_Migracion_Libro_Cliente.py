@@ -68,6 +68,53 @@ def _descuadres_xlsx(det, meses):
         ws.column_dimensions[get_column_letter(j)].width = _w.get(k, 14)
     ws.freeze_panes = f"A{r0+1}"
     buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
+
+def _tabla_xlsx(rows, titulo, subtitulo="", nota=""):
+    """Excel con formato (bytes) para cualquier listado de detalle por trabajador
+    (RUT omitidos, instituciones sin homologar, casos AFC, etc.)."""
+    AZUL, AZUL_CL, GRIS = "1E5591", "EAF2FB", "5C6773"
+    rows = list(rows)
+    cols = list(rows[0].keys()) if rows else ["(sin datos)"]
+    wb = Workbook(); ws = wb.active; ws.title = titulo[:31]
+    _b = Side(style="thin", color="D0D7DE"); bd = Border(left=_b, right=_b, top=_b, bottom=_b)
+    ncol = len(cols); last = get_column_letter(ncol)
+    ws.merge_cells(f"A1:{last}1")
+    c = ws["A1"]; c.value = titulo
+    c.font = Font(name="Arial", size=13, bold=True, color="FFFFFF")
+    c.fill = PatternFill("solid", fgColor=AZUL); c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 26
+    r0 = 3
+    if subtitulo:
+        ws.merge_cells(f"A2:{last}2")
+        c = ws["A2"]; c.value = subtitulo
+        c.font = Font(name="Arial", size=9, color=GRIS); c.fill = PatternFill("solid", fgColor=AZUL_CL)
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
+        ws.row_dimensions[2].height = 30
+        r0 = 4
+    for j, h in enumerate(cols, start=1):
+        cc = ws.cell(row=r0, column=j, value=h)
+        cc.font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+        cc.fill = PatternFill("solid", fgColor=AZUL); cc.border = bd
+        cc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[r0].height = 22
+    for i, row in enumerate(rows):
+        rr = r0 + 1 + i
+        for j, k in enumerate(cols, start=1):
+            v = row.get(k)
+            cc = ws.cell(row=rr, column=j, value=v); cc.border = bd
+            cc.font = Font(name="Arial", size=10)
+            cc.alignment = Alignment(horizontal="left", vertical="center", wrap_text=(len(str(v or "")) > 40))
+    _long = {c: max(len(str(c)), *(len(str(rw.get(c, ""))) for rw in rows)) if rows else len(str(c)) for c in cols}
+    for j, k in enumerate(cols, start=1):
+        ws.column_dimensions[get_column_letter(j)].width = min(max(_long.get(k, 12) + 2, 12), 70)
+    if nota:
+        rr = r0 + 2 + len(rows)
+        ws.merge_cells(f"A{rr}:{last}{rr}")
+        c = ws.cell(row=rr, column=1, value=nota)
+        c.font = Font(name="Arial", size=9, italic=True, color=GRIS)
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
+    ws.freeze_panes = f"A{r0+1}"
+    buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 AMBAR = "#FFF3CD"; ROJO = "#F8D7DA"; VERDE = "#D4EDDA"
 _XLMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _ETIQ_CLASIF = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja/CCAF",
@@ -637,6 +684,8 @@ for _, r in editor.iterrows():
     if _omitida(r): continue
     cid = _id_real(r["ID Rex"]); bl = str(r["Bloque"]).strip()
     if cid and bl in ("haber", "desc", "aporte"): tipo_map[cid] = bl
+# IDs de haberes EXENTOS según el "Tipo" del catálogo (para ordenar imponibles antes que exentos en el archivo).
+_exento_ids = {cid for cid in by_id if "exento" in norm(by_id[cid].get("tipo", ""))}
 invalidos = sorted(v for v in set(mapping.values()) if v not in by_id and v not in _PSEUDO)
 # Pendientes: sin ID y NO omitidas (las omitidas no bloquean).
 pend_df = editor[editor["ID Rex"].map(lambda v: _id_real(v) == "") & (~editor["Omitir"].astype(bool))][["Columna del libro", "Bloque"]]
@@ -712,7 +761,7 @@ if st.button(_btn, type="primary", disabled=not listo, use_container_width=True)
         cfg = dict(empresa_id=empresa_id, mutual_id=mutual_id, apv_inst=apv_inst, caja_inst=caja_inst,
                    num_contrato=int(num_contrato), jornada=jornada, periodo=per)
         filas, res = generar_detalle(lb["df"], lb["hr"], lb["struct"], mapping, params_all.get(per, {}),
-                                     cot, cfg, homolog=homolog, dotacion=dotacion, tipo_map=tipo_map)
+                                     cot, cfg, homolog=homolog, dotacion=dotacion, tipo_map=tipo_map, exento_ids=_exento_ids)
         resultados.append({"periodo": per, "filas": filas, "res": res})
         _prog.progress(i / len(_gen), text=f"Generando… {per}")
     _prog.empty()
@@ -725,8 +774,10 @@ if st.button(_btn, type="primary", disabled=not listo, use_container_width=True)
                                 "Estado": "✅ Cuadra" if _desc(r["res"]) == 0 else "⚠️ Revisar"}
                                for r in resultados]), hide_index=True, use_container_width=True)
     _tot_desc = sum(_desc(r["res"]) for r in resultados)
+    _tot_trab = sum(len(r["res"].get("descuadres", [])) for r in resultados)
     if _tot_desc:
-        st.error(f"⚠️ Hay **{_tot_desc}** descuadre(s) en total — revisa el detalle antes de cargar a Rex.")
+        st.error(f"⚠️ **{_tot_trab} trabajador(es) descuadran** — revísalos antes de cargar a Rex.")
+        st.caption(f"{_tot_desc} descuadres en total (haberes y/o líquido); un mismo trabajador puede fallar en más de uno.")
         # Detalle POR TRABAJADOR: qué RUT descuadra y por cuánto (para ubicar el concepto que falta o sobra).
         def _motivo(d):
             dh, dl = d["dif_haberes"], d["dif_liquido"]
@@ -766,24 +817,49 @@ if st.button(_btn, type="primary", disabled=not listo, use_container_width=True)
         st.warning(f"🔴 **{len(_omit)} RUT omitidos** (no están en la dotación) en total — se excluyeron del archivo.")
         st.dataframe(pd.DataFrame(_omit).style.set_properties(**{"background-color": ROJO}),
                      hide_index=True, use_container_width=True)
+        st.download_button("⬇️ Descargar RUT omitidos (.xlsx)",
+                           _tabla_xlsx(_omit, "RUT omitidos — no están en la dotación",
+                                       "Estos RUT vienen en el libro pero no se encontraron en la dotación, "
+                                       "así que se excluyeron del archivo de migración. Agrégalos a la dotación "
+                                       "y vuelve a generar."),
+                           file_name=f"rut_omitidos_{'_'.join(meses)}.xlsx", mime=_XLMIME,
+                           key="dl_omit")
 
     # --- Instituciones sin homologar (todos los meses) ---
     _sin = [{"Período": r["periodo"], "Tipo": li["tipo"], "Valor en el libro": li["valor_libro"]}
             for r in resultados for li in r["res"].get("log_inst", []) if li["estado"] == "SIN HOMOLOGAR"]
     if _sin:
         with st.expander(f"🏛️ {len(_sin)} institución(es) SIN HOMOLOGAR — revisar", expanded=True):
-            st.dataframe(pd.DataFrame(_sin).drop_duplicates(), hide_index=True, use_container_width=True)
+            _sin_u = pd.DataFrame(_sin).drop_duplicates().to_dict("records")
+            st.dataframe(pd.DataFrame(_sin_u), hide_index=True, use_container_width=True)
             st.warning("🟠 Salieron con el texto crudo del libro. Agrégalas en **📋 Tablas de referencia** "
                        "(arriba) y vuelve a generar.")
+            st.download_button("⬇️ Descargar instituciones sin homologar (.xlsx)",
+                               _tabla_xlsx(_sin_u, "Instituciones SIN HOMOLOGAR",
+                                           "Estos valores del libro no calzaron con ninguna institución del "
+                                           "listado. Homológalas en listado_instituciones.xlsx y vuelve a generar."),
+                               file_name=f"instituciones_sin_homologar_{'_'.join(meses)}.xlsx", mime=_XLMIME,
+                               key="dl_sin")
 
     # --- Validación del aporte de cesantía (AFC) ---
     _afc = [{"Período": r["periodo"], "RUT": a["rut"], "Detalle": a["motivo"]}
             for r in resultados for a in r["res"].get("log_afc", [])]
     if _afc:
         with st.expander(f"🟠 Aporte de cesantía (AFC): {len(_afc)} caso(s) a revisar", expanded=True):
-            st.caption("Alerta **informativa** (no bloquea): al dividir el AFC del empleador faltó el **tipo de "
-                       "contrato** en la dotación, así que no se pudo repartir en CI + Solidario para esos RUT.")
+            st.caption("Alerta **informativa** (no bloquea): a estos RUT les faltó el **tipo de contrato** en la "
+                       "dotación, así que el tipo (plazo fijo / indefinido) se **infirió por la tasa** del AFC para "
+                       "poder repartirlo en CI + Solidario. Revisa el detalle y, si corresponde, corrige la dotación.")
             st.dataframe(pd.DataFrame(_afc), hide_index=True, use_container_width=True)
+            st.download_button("⬇️ Descargar casos AFC (.xlsx)",
+                               _tabla_xlsx(_afc, "Aporte de cesantía (AFC) — casos inferidos",
+                                           "Sin tipo de contrato en la dotación, se infirió por la tasa del AFC "
+                                           "(0,8% indefinido tope · 2,4% indefinido · 3,0% plazo fijo/obra) para "
+                                           "repartir el aporte en CI + Solidario. La columna Detalle indica qué se "
+                                           "hizo en cada caso.",
+                                           nota="Recomendación: cargar el tipo de contrato en la dotación para no "
+                                                "depender de la inferencia por tasa."),
+                               file_name=f"casos_afc_{'_'.join(meses)}.xlsx", mime=_XLMIME,
+                               key="dl_afc")
 
     # --- Avisos (unión de flags de todos los meses) ---
     for f in sorted({fl for r in resultados for fl in r["res"]["flags"]}):
