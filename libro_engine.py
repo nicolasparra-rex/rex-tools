@@ -194,8 +194,8 @@ STRUCT = {
  "dias_trab": ["dias trabajados","dias trab","dias trabajados.-"],
  "dias_lic": ["dias de licencia","dias licencia","dias de licencias","dias licencias","dias de lic"],
  "contrato": ["numero contrato","numero de contrato","num contrato","nro contrato","n contrato","contrato"],
- "afp": ["fondo de cotizacion","afp","prevision"],
- "salud": ["fonasa/isapre","salud","isapre"],
+ "afp": ["fondo de cotizacion","cotizacion afp","institucion afp","afp","prevision"],
+ "salud": ["fonasa/isapre","isapre/fonasa","cotizacion salud","institucion salud","salud","isapre"],
  "base_afp": ["monto imponible","base imponible afp","imponible afp","imp. prev./salud","imponible","imponible topeado",
               "monto afecto a leyes sociales","afecto a leyes sociales","monto afecto leyes sociales"],
  "base_ces": ["base imponible cesantia","imponible cesantia","imp. cesantia","imponible seguro cesantia",
@@ -448,17 +448,35 @@ def detect_header_row(df, **_):
                 return r
     return 0
 
-def match_struct(hdr):
+# Campos estructurales que son una INSTITUCIÓN (texto: Fonasa, Provida, Banmédica...), NO un monto.
+# Se usa una guardia por tipo de dato para no capturar por error la columna del MONTO de salud/AFP.
+_STRUCT_TEXTO = {"afp", "salud"}
+def _es_num(v):
+    if v is None: return False
+    ss = str(v).strip()
+    if ss == "" or ss.lower() == "nan": return False
+    try: float(ss.replace(".", "").replace(",", ".")); return True
+    except Exception: return False
+def match_struct(hdr, rows=None):
     """Detecta columnas estructurales. Prioriza coincidencia EXACTA sobre 'empieza con'.
     Ignora puntuación al borde del nombre (paréntesis/asteriscos/guiones), ej. '( Monto Afecto a
-    Leyes Sociales )' o 'Dias Trab.-'."""
+    Leyes Sociales )' o 'Dias Trab.-'.
+    Si se entregan 'rows' (muestra de filas de datos), los campos de INSTITUCIÓN (afp/salud) solo
+    aceptan columnas con valores de TEXTO, no montos: así no confunde 'Salud'=monto con la isapre."""
     norms = {i: norm(h).strip(" ()*.-·:") for i, h in enumerate(hdr) if h}
+    def _col_texto(i):
+        if rows is None: return True
+        vals = [r[i] for r in rows[:25] if i < len(r)]
+        vals = [v for v in vals if str(v).strip() not in ("", "nan", "None")]
+        if not vals: return True                       # sin datos: no descartar
+        return sum(_es_num(v) for v in vals) <= len(vals) // 2   # texto = la mayoría NO numérico
     out, used = {}, set()
     for exact in (True, False):
         for campo, syns in STRUCT.items():
             if campo in out: continue
             for i, n in norms.items():
                 if i in used: continue
+                if campo in _STRUCT_TEXTO and not _col_texto(i): continue
                 if (n in syns) if exact else any(n.startswith(s) for s in syns):
                     out[campo] = i; used.add(i); break
     return out
@@ -550,7 +568,12 @@ def classify_and_map(hdr, struct, catalog_names=None, saved=None, valid_ids=None
         else: grupo = "?"
         cid, fuente, conf = None, "SIN MAPEAR", "-"
         _caja = sugerir_caja(n, valid_ids)                        # CAJA (CCAF): regla de negocio, gana al catálogo
-        if _caja is not None and _ok(_caja):
+        # SOBREGIRO: manda la POSICIÓN del libro (haber=compensaSobre / desc=sobregiro_anterior), aun si el
+        # catálogo tiene un concepto "Sobregiro" (evita que un 'Sobregiro' haber del catálogo pise un descuento).
+        if n in CONCEPTO and CONCEPTO[n] == "__SOBREGIRO__":
+            _c = "compensaSobre" if grupo == "haber" else "sobregiro_anterior"
+            if _ok(_c): cid, fuente, conf = _c, "regla-sobregiro", "media"
+        elif _caja is not None and _ok(_caja):
             cid, fuente, conf = _caja, "regla-caja", "revisar"
         elif n in saved and _ok(saved[n]):
             cid, fuente, conf = saved[n], "guardado", "alta"
@@ -641,7 +664,7 @@ def dividir_afc(afc, tipo_cont, antiguedad, imponible=0):
 def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, config, homolog=None, dotacion=None, tipo_map=None, exento_ids=None):
     """mapping: {norm(header): id_rex}. Suma columnas del mismo id. Cuadra al peso."""
     periodo = config["periodo"]; emp_id = config.get("empresa_id", ""); mut_id = config.get("mutual_id", "")
-    apv_inst = config.get("apv_inst", "afp"); caja_inst = config.get("caja_inst", "losandes")
+    apv_inst = config.get("apv_inst", "afp"); caja_inst = config.get("caja_inst", "")   # SIN default fijo: la caja viene de la dotación
     ncont = config.get("num_contrato", 1); jornada = config.get("jornada", "C")
     # Tope imponible de salud = tope imponible AFP (mismo techo, ~90 UF). OJO: NO es topeSalud_pesos,
     # que es el 7% del tope (monto máx. de cotización), no la base imponible.
@@ -678,7 +701,7 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if td_i is not None and th_i is not None and th_i < i < td_i: return "desc"
         if td_i is not None and i > td_i: return "aporte"
         return "desc"
-    filas = []; flags = set(); empleados = 0; omitidos = 0; bh = bd = bt = 0; log_contratos = []; log_afc = []; descuadres = []
+    filas = []; flags = set(); empleados = 0; omitidos = 0; bh = bd = bt = 0; log_contratos = []; log_afc = []; descuadres = []; caja_pend = set()
     if sidx("dias_trab") is None:
         flags.add("El libro no trae 'Días Trabajados': se asumieron 30 días por trabajador — revisar con el consultor.")
     _ETIQ = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja"}
@@ -738,7 +761,12 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         _reg_inst("is", sal, idsal_res)
         liq = _num(row[sidx("liquido")]) if sidx("liquido") is not None else 0
         sums = {cid: sum(_num(row[i]) for i in cols) for cid, cols in id_cols.items()}
-        rebajas = sums.get("afp", 0) + sums.get("isapre", 0) + sums.get("cesEmpleado", 0)
+        # Tope de salud del mes = 7% del tope imponible (en pesos). La cotización de salud deducible de
+        # impuesto (y la col Cotización de isapre) se TOPEA ahí: el adicional isapre por sobre el 7% del
+        # tope NO rebaja impuesto. Para rentas bajo el tope sin adicional, min() deja su 7% real.
+        _salud_tope = round(tope_afp * 0.07) if tope_afp else 0
+        _salud_ded = min(sums.get("isapre", 0), _salud_tope) if _salud_tope else sums.get("isapre", 0)
+        rebajas = sums.get("afp", 0) + _salud_ded + sums.get("cesEmpleado", 0)
         afp_m = sums.get("afp", 0); sis_m = sums.get("sis", 0)
         # Renta imponible AFP: del libro si viene; si NO (el libro no la trae), se DERIVA del monto de una
         # cotización que sea % puro del imponible (AFP ÷ tasa, o SIS ÷ tasa). No afecta la cuadratura
@@ -780,7 +808,8 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             if cid == "afp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afp, grp=g)
             elif cid == "isapre":
                 # AFECTO topeado al tope imponible AFP (mismo techo que salud), fonasa e isapre por igual.
-                add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idsal, cot=round(_tope(base_afp, tope_afp) * 0.07), grp=g, p8=tope_salud)
+                # Cotización (col H) = cotización de salud deducible = min(salud del libro, tope de salud del mes).
+                add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idsal, cot=min(m, _salud_tope) if _salud_tope else m, grp=g, p8=tope_salud)
             elif cid == "cesEmpleado": add(cid, m, afecto=_tope(base_ces, tope_ces), inst=idafp, cot=0.6, grp=g)
             elif cid == "mutual": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=mut_e, cot=(_num(pmut_e) if pmut_e not in (None, "") else 0), grp="aporte")
             elif cid == "sis": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=sis_pct, grp="aporte")
@@ -797,31 +826,30 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
             elif cid == "aporteAFPemp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_afpemp, grp="aporte")
             elif cid == "aporteFAPPCEV": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_fappcev, grp="aporte")
             elif cid in INST_AFP_CONC: add(cid, m, inst=apv_inst, grp=g)
-            elif cid in INST_CAJA_CONC: add(cid, m, inst=caja_e, grp=g)
-            elif cid == "cajaComp": add(cid, m, afecto=_tope(base_afp, tope_afp), inst=caja_e, grp="aporte")
+            elif cid in INST_CAJA_CONC:
+                if m and not caja_e: caja_pend.add(rut)
+                add(cid, m, inst=caja_e, grp=g)
+            elif cid == "cajaComp":
+                if m and not caja_e: caja_pend.add(rut)
+                add(cid, m, afecto=_tope(base_afp, tope_afp), inst=caja_e, grp="aporte")
             elif cid in RELIQ:
                 add(cid, m, afecto=base_afp, grp=("aporte" if cid in RELIQ_APO else "desc"))
                 if m:   # solo avisar si HAY reliquidación real: evita falsa alarma cuando la columna viene en 0
                     flags.add("Reliquidación cargada como consolidado — revisar devengo (Fecha de aplicación por mes de origen)")
             else:
                 add(cid, m, init=((pactado or m) if cid == "sueldoBase" else 0), grp=g)
-        # AFECTO del impuesto = base tributable del libro ('Monto Afecto a Impuesto'); si no viene, la imponible.
-        # NO se resta lo legal (eso va aparte en la col 'Total de rebajas por LLSS').
-        trib = (base_trib + rebajas) if base_trib else base_afp
-        # Validación (aviso): el 'total tributable' del cliente vs el esperado (imponible − rebajas legales).
-        if base_trib and abs(base_trib - (base_afp - rebajas)) > 2:
-            flags.add("Hay trabajador(es) donde el 'total tributable' del libro no calza con (imponible − rebajas) — "
-                      "revisar: pueden ser haberes exentos/no imponibles, o un error de dato en el tributable.")
-        # Rentas no gravadas = haberes NO GRAVADOS con impuesto = Total Haberes − base TRIBUTABLE.
-        # Si el libro trae '* TOTAL HABERES NO IMPONIBLES *', se usa ese; si no, se calcula (TH − tributable).
-        _thr = _num(row[sidx("total_haberes")]) if th_i is not None else 0
-        if _noimp_i is not None and pd.notna(row[_noimp_i]):
-            no_grav = _num(row[_noimp_i])
-        else:
-            no_grav = max(_thr - base_afp, 0)
-            if base_trib <= 0 and no_grav > 0:
-                flags.add("El libro no trae el total tributable ni los haberes no imponibles: 'Rentas no gravadas' "
-                          "se estimó (total haberes − imponible) — revisar con el consultor.")
+        # AFECTO del impuesto y RENTAS NO GRAVADAS se derivan del TIPO del concepto (catálogo), NO del
+        # imponible topeado ni de una columna de 'tributable' (que no viene en el libro original):
+        #   - Rentas no gravadas (col N) = haberes con Tipo "Haber exento" (exento_ids).
+        #   - Tributable BRUTO = suma de los DEMÁS haberes (afecto / afecto especial / solo tributable /
+        #     vacaciones), SIN tope. Así no se dispara cuando el imponible viene topeado (renta alta).
+        _exe = exento_ids or set()
+        _hab = [(r[3], r[4]) for _g, r in emp_rows if _g == "haber"]
+        no_grav = sum(m for cid, m in _hab if cid in _exe)
+        trib_bruto = sum(m for cid, m in _hab if cid not in _exe)
+        # AFECTO del impuesto = tributable YA REBAJADO = tributable bruto − Total Rebajas LLSS (def. Xime/Marlene).
+        # Coincide con el "Total Tributable Final" (neto) que trae el cliente.
+        trib = max(trib_bruto - rebajas, 0)
         # parcial7 (impuesto) = total de rebajas por leyes sociales (mismo valor que la col 12)
         add("impuesto", sums.get("impuesto", 0), afecto=trib, reb=rebajas, grp="desc", p7=rebajas, rng=no_grav)
         # Conceptos OBLIGATORIOS: Rex los exige SIEMPRE por trabajador, aun en 0, con su definición
@@ -874,6 +902,9 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         for _idx, (g, r) in sorted(enumerate(emp_rows), key=lambda x: (_cat_rank(x[1][0], x[1][1][3]), x[0])):
             if r[3] in OBLIGATORIOS or _num(r[4]) != 0:
                 filas.append(r)
+    if caja_pend:
+        flags.add(f"{len(caja_pend)} trabajador(es) con aporte a Caja/CCAF pero SIN caja en la dotación — "
+                  "quedaron sin institución de caja. Agrega la columna 'caja' (ID de la caja) en la dotación por RUT.")
     log_inst = [{"tipo": _ETIQ.get(cl, cl), "valor_libro": raw,
                  "id_rex": (res if res else ""), "estado": ("OK" if res else "SIN HOMOLOGAR")}
                 for (cl, raw), res in sorted(inst_seen.items())]
