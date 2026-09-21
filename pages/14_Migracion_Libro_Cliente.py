@@ -284,7 +284,8 @@ _DOTACION_SQL = '''SELECT
     e.identificador_nacional                                                AS "Rut empresa",
     e.empresa                                                               AS "idempresa",
     e.mutual                                                                AS "Mutual",
-    e."cotizacionMutu"                                                      AS "% mutual"
+    e."cotizacionMutu"                                                      AS "% mutual",
+    e."cajaComp"                                                            AS "Caja"
 FROM T$empleadoscontr contr
 INNER JOIN T$empresas e ON e.empresa = contr.empresa'''
 
