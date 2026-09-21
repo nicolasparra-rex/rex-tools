@@ -23,11 +23,14 @@ def zoho_json(r, contexto=""):
     """
     etiqueta = f" ({contexto})" if contexto else ""
 
+    # El status manda: un error de servidor con cuerpo vacío es un error,
+    # no "sin resultados". Por eso se evalúa antes del 204.
+    if not r.ok:
+        cuerpo = r.text[:_EXTRACTO] or "(cuerpo vacío)"
+        return None, f"Zoho respondió HTTP {r.status_code}{etiqueta}: {cuerpo}"
+
     if r.status_code == 204 or not (r.content or b"").strip():
         return None, None
-
-    if not r.ok:
-        return None, f"Zoho respondió HTTP {r.status_code}{etiqueta}: {r.text[:_EXTRACTO]}"
 
     try:
         return r.json(), None
