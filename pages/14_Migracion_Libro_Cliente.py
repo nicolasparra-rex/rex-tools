@@ -270,7 +270,7 @@ def to_csv(filas, incluir_parciales=True):
 cliente = ""  # los archivos de salida se nombran por período
 # valores por defecto (se completan desde la dotación / homologación)
 apv_inst = "afp"
-caja_inst = "losandes"
+caja_inst = ""   # sin default fijo: la caja se resuelve por RUT desde la dotación
 jornada = "C"
 # fallbacks internos (se completan desde la dotación)
 empresa_id, mutual_id, num_contrato = "", "", 1
@@ -437,7 +437,7 @@ for f in libro_files:
     hri = detect_header_row(dfi)
     hdri = [x if str(x) != "nan" else "" for x in dfi.iloc[hri].values]
     libros.append({"name": f.name, "df": dfi, "sheet": sheeti, "hr": hri,
-                   "hdr": hdri, "struct": match_struct(hdri), "periodo": detectar_periodo(dfi, f.name)})
+                   "hdr": hdri, "struct": match_struct(hdri, dfi.iloc[hri+1:hri+21].values.tolist()), "periodo": detectar_periodo(dfi, f.name)})
 ref = libros[0]
 df, sheet, hr, hdr, struct = ref["df"], ref["sheet"], ref["hr"], ref["hdr"], ref["struct"]
 # Mapeo por UNIÓN de columnas de TODOS los libros: cada mes puede traer columnas distintas.
