@@ -4,6 +4,8 @@ import pandas as pd
 import json
 from datetime import datetime
 
+from lib.zoho_http import zoho_json, zoho_lista
+
 st.set_page_config(page_title="Zoho Proyectos | Rex+ Tools", page_icon="📋", layout="wide")
 
 try:
@@ -29,10 +31,8 @@ def get_access_token(refresh_token, client_id, client_secret):
         "grant_type":    "refresh_token",
     }
     r = requests.post(url, params=params)
-    data = r.json()
-    if "access_token" in data:
-        return data["access_token"]
-    return None
+    datos, error = zoho_json(r, "token OAuth")
+    return (datos or {}).get("access_token"), error
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -45,8 +45,9 @@ def get_projects(access_token, portal_id):
     while True:
         params = {"status": "active", "range": 100, "index": index}
         r = requests.get(url, headers=headers, params=params)
-        data = r.json()
-        batch = data.get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"proyectos index={index}")
+        if error:
+            return all_projects, error
         if not batch:
             break
         all_projects.extend(batch)
@@ -54,7 +55,7 @@ def get_projects(access_token, portal_id):
         if len(batch) < 100:
             break
         index += 100
-    return all_projects
+    return all_projects, None
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -63,10 +64,7 @@ def get_tasks(access_token, portal_id, project_id):
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     params = {"range": 100}
     r = requests.get(url, headers=headers, params=params)
-    try:
-        return r.json().get("tasks", [])
-    except Exception:
-        return []
+    return zoho_lista(r, "tasks", f"tareas proyecto {project_id}")
 
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -179,21 +177,28 @@ with col_btn:
 
 # Token y proyectos
 with st.spinner("Conectando con Zoho Projects..."):
-    token = get_access_token(
+    token, error_token = get_access_token(
         st.secrets["ZOHO_REFRESH_TOKEN"],
         st.secrets["ZOHO_CLIENT_ID"],
         st.secrets["ZOHO_CLIENT_SECRET"],
     )
+
+if error_token:
+    st.error(f"❌ {error_token}")
 
 if not token:
     st.error("❌ No se pudo obtener el token. Revisa los secrets en Streamlit.")
     st.stop()
 
 with st.spinner("Cargando proyectos..."):
-    projects = get_projects(token, portal_id)
+    projects, error_projects = get_projects(token, portal_id)
+
+if error_projects:
+    st.error(f"❌ {error_projects}")
 
 if not projects:
-    st.warning("No se encontraron proyectos activos.")
+    st.warning("Zoho no devolvió proyectos activos (respuesta vacía o sin datos). "
+               "Pulsa 🔄 Actualizar para reintentar.")
     st.stop()
 
 df = build_df(projects)
@@ -385,7 +390,10 @@ if selected != "Selecciona un proyecto...":
     st.markdown("---")
     st.markdown("**🗂️ Tareas del proyecto**")
     with st.spinner("Cargando tareas..."):
-        tasks = get_tasks(token, portal_id, project_id)
+        tasks, error_tasks = get_tasks(token, portal_id, project_id)
+
+    if error_tasks:
+        st.error(f"❌ {error_tasks}")
 
     if tasks:
         task_rows = []
@@ -411,4 +419,4 @@ if selected != "Selecciona un proyecto...":
             }
         )
     else:
-        st.info("Este proyecto no tiene tareas registradas.")
+        st.info("Zoho no devolvió tareas para este proyecto.")

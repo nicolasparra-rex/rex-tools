@@ -1,5 +1,7 @@
 import requests, json
 
+from lib.zoho_http import zoho_json, zoho_lista
+
 REFRESH_TOKEN = "1000.9b2190e906bcb52c5944970e44497ac4.4cdc09459045e0865441fdceed03cf3e"
 CLIENT_ID     = "1000.C37R6R47ZDGF9Y635H1J6YPTERUEQN"
 CLIENT_SECRET = "d187d8556f52883e9624b1f55a5495f84d31d383c3"
@@ -12,14 +14,24 @@ r = requests.post("https://accounts.zoho.com/oauth/v2/token", params={
     "client_secret": CLIENT_SECRET,
     "grant_type":    "refresh_token",
 })
-token = r.json().get("access_token")
+datos, error = zoho_json(r, "token OAuth")
+if error:
+    print("ERROR:", error)
+    raise SystemExit(1)
+token = (datos or {}).get("access_token")
 print("Token OK:", bool(token))
 
 # 2. Un proyecto de muestra
 headers = {"Authorization": f"Zoho-oauthtoken {token}"}
 r2 = requests.get(f"https://projectsapi.zoho.com/restapi/portal/{PORTAL_ID}/projects/", 
                   headers=headers, params={"status": "active", "range": 1})
-projects = r2.json().get("projects", [])
+projects, error = zoho_lista(r2, "projects", "proyectos activos")
+if error:
+    print("ERROR:", error)
+    raise SystemExit(1)
+if not projects:
+    print("Zoho no devolvió proyectos (respuesta vacía o sin datos).")
+    raise SystemExit(0)
 if projects:
     p = projects[0]
     print("\n── KEYS del proyecto ──")
@@ -32,5 +44,11 @@ if projects:
     pid = p.get("id")
     r3 = requests.get(f"https://projectsapi.zoho.com/restapi/portal/{PORTAL_ID}/projects/{pid}/tasks/",
                       headers=headers, params={"range": 3})
+    tasks, error = zoho_lista(r3, "tasks", f"tareas proyecto {pid}")
     print(f"\n── Respuesta tareas (status {r3.status_code}) ──")
-    print(r3.text[:500])
+    if error:
+        print("ERROR:", error)
+    elif not tasks:
+        print("Zoho no devolvió tareas para este proyecto.")
+    else:
+        print(r3.text[:500])

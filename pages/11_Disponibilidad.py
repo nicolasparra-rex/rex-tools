@@ -11,6 +11,8 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 from calendar import monthrange
 
+from lib.zoho_http import zoho_json, zoho_lista
+
 try:
     from lib.branding import aplicar_branding, aplicar_footer, hero
     BRANDING = True
@@ -35,7 +37,8 @@ def get_access_token(refresh_token, client_id, client_secret):
         "client_secret": client_secret,
         "grant_type":    "refresh_token",
     })
-    return r.json().get("access_token")
+    datos, error = zoho_json(r, "token OAuth")
+    return (datos or {}).get("access_token"), error
 
 def parse_cf(custom_fields, key):
     for item in custom_fields:
@@ -59,7 +62,9 @@ def get_proyectos(access_token, portal_id):
     index = 1
     while True:
         r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"proyectos index={index}")
+        if error:
+            return proyectos, error
         if not batch:
             break
         for p in batch:
@@ -75,16 +80,14 @@ def get_proyectos(access_token, portal_id):
         if len(batch) < 100:
             break
         index += 100
-    return proyectos
+    return proyectos, None
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_tareas_proyecto(access_token, portal_id, project_id):
     url = f"https://projectsapi.zoho.com/restapi/portal/{portal_id}/projects/{project_id}/tasks/"
     headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
     r = requests.get(url, headers=headers, params={"range": 200})
-    if r.status_code != 200:
-        return []
-    return r.json().get("tasks", [])
+    return zoho_lista(r, "tasks", f"tareas proyecto {project_id}")
 
 def parse_fecha(s):
     if not s:
@@ -108,22 +111,33 @@ with col_btn:
         st.rerun()
 
 try:
-    token = get_access_token(
+    token, error_token = get_access_token(
         st.secrets["ZOHO_REFRESH_TOKEN"],
         st.secrets["ZOHO_CLIENT_ID"],
         st.secrets["ZOHO_CLIENT_SECRET"],
     )
     ZOHO_OK = bool(token)
-except Exception:
-    token = None
+except Exception as e:
+    token, error_token = None, str(e)
     ZOHO_OK = False
+
+if error_token:
+    st.error(f"❌ {error_token}")
 
 if not ZOHO_OK:
     st.error("❌ No se pudo conectar con Zoho.")
     st.stop()
 
 with st.spinner("Cargando proyectos..."):
-    proyectos = get_proyectos(token, portal_id)
+    proyectos, error_proyectos = get_proyectos(token, portal_id)
+
+if error_proyectos:
+    st.error(f"❌ {error_proyectos}")
+
+if not proyectos:
+    st.info("Zoho no devolvió proyectos (respuesta vacía o sin datos). "
+            "Pulsa 🔄 Actualizar para reintentar.")
+    st.stop()
 
 # Lista de consultores disponibles
 consultores = sorted({p["consultor"] for p in proyectos if p["consultor"]})
@@ -166,9 +180,12 @@ busqueda_fin = max(fin, hoy + timedelta(days=30))
 # Traer tareas de sus proyectos (una sola vez, ventana amplia)
 agenda = []       # dentro del rango visible
 agenda_full = []  # toda la ventana de búsqueda (para próxima disponibilidad)
+errores_tareas = []
 barra = st.progress(0.0, text="Cargando agenda...")
 for i, p in enumerate(proyectos_consultor):
-    tasks = get_tareas_proyecto(token, portal_id, p["id"])
+    tasks, error_tareas = get_tareas_proyecto(token, portal_id, p["id"])
+    if error_tareas:
+        errores_tareas.append(error_tareas)
     for t in tasks:
         f_ini = parse_fecha(t.get("start_date_format", "") or t.get("start_date", ""))
         f_fin = parse_fecha(t.get("end_date_format", "") or t.get("end_date", ""))
@@ -186,6 +203,10 @@ for i, p in enumerate(proyectos_consultor):
             d += timedelta(days=1)
     barra.progress((i + 1) / max(len(proyectos_consultor), 1), text=f"Cargando agenda... {i+1}/{len(proyectos_consultor)}")
 barra.empty()
+
+if errores_tareas:
+    st.error("❌ " + errores_tareas[0]
+             + (f" (y {len(errores_tareas) - 1} error(es) más)" if len(errores_tareas) > 1 else ""))
 
 df_ag = pd.DataFrame(agenda)
 dias_ocupados_full = set(pd.DataFrame(agenda_full)["fecha"].unique()) if agenda_full else set()
