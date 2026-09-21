@@ -1,3 +1,5 @@
 .DS_Store
 .streamlit/secrets.toml
 .DS_Store
+__pycache__/
+*.py[cod]
