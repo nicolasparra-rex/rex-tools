@@ -6,7 +6,8 @@ set_page_config y un candado de acceso. Lee proyectos directo desde la API de
 Zoho Projects (reusa el patron OAuth de 8_Zoho_Proyectos) y deja como respaldo
 la carga del export .xlsx.
 
-Para soltar en rex-tools: copiar a pages/. Requiere en secrets.toml:
+Para soltar en rex-tools: copiar a pages/ junto con lib/zoho_http.py (unica
+dependencia interna). Requiere en secrets.toml:
 ZOHO_REFRESH_TOKEN, ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET (y opcional ZOHO_PORTAL_ID).
 """
 
@@ -19,6 +20,8 @@ from datetime import date, datetime
 import pandas as pd
 import requests
 import streamlit as st
+
+from lib.zoho_http import zoho_json, zoho_lista
 
 st.set_page_config(page_title="Bono Consultores", page_icon="🔒", layout="wide")
 
@@ -130,7 +133,8 @@ def _zoho_token(refresh_token, client_id, client_secret):
         "refresh_token": refresh_token, "client_id": client_id,
         "client_secret": client_secret, "grant_type": "refresh_token",
     })
-    return r.json().get("access_token")
+    datos, error = zoho_json(r, "token OAuth")
+    return (datos or {}).get("access_token"), error
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -142,17 +146,16 @@ def _zoho_projects(access_token, portal_id, status):
     while True:
         r = requests.get(url, headers=headers,
                          params={"status": status, "range": 100, "index": index})
-        try:
-            batch = r.json().get("projects", [])
-        except Exception:
-            break
+        batch, error = zoho_lista(r, "projects", f"proyectos {status} index={index}")
+        if error:
+            return out, error
         if not batch:
             break
         out.extend(batch)
         if len(batch) < 100:
             break
         index += 100
-    return out
+    return out, None
 
 
 def _cf_dict(custom_fields):
@@ -200,18 +203,25 @@ def _fmt_date(d):
 def cargar_proyectos_zoho() -> pd.DataFrame:
     """Trae proyectos desde Zoho y arma el mismo DataFrame que el Excel."""
     portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
-    token = _zoho_token(
+    token, error_token = _zoho_token(
         st.secrets["ZOHO_REFRESH_TOKEN"],
         st.secrets["ZOHO_CLIENT_ID"],
         st.secrets["ZOHO_CLIENT_SECRET"],
     )
+    if error_token:
+        st.error(f"❌ {error_token}")
     if not token:
         st.error("No se pudo obtener el token de Zoho. Revisa los secrets.")
         st.stop()
 
-    proyectos = _zoho_projects(token, portal_id, "active")
+    proyectos, error_activos = _zoho_projects(token, portal_id, "active")
+    if error_activos:
+        st.error(f"❌ {error_activos}")
     try:                                   # los cerrados viejos pueden estar archivados
-        proyectos += _zoho_projects(token, portal_id, "archived")
+        archivados, error_arch = _zoho_projects(token, portal_id, "archived")
+        if error_arch:
+            st.error(f"❌ {error_arch}")
+        proyectos += archivados
     except Exception:
         pass
 
@@ -360,6 +370,10 @@ if fuente == "Zoho (en vivo)":
             st.rerun()
     with st.spinner("Conectando con Zoho Projects..."):
         raw = cargar_proyectos_zoho()
+    if raw.empty:
+        st.info("Zoho no devolvió proyectos (respuesta vacía o sin datos). "
+                "Pulsa 🔄 Refrescar para reintentar.")
+        st.stop()
     st.caption(f"{len(raw)} proyectos traídos desde Zoho (todos los estados).")
 else:
     uploaded = st.file_uploader("Sube el export de proyectos de Zoho (.xlsx)", type=["xlsx"])

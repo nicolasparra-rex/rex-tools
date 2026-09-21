@@ -27,6 +27,8 @@ else:
     st.title("📋 Minutas de Implementación")
     st.caption("Completa los datos y descarga la minuta en Excel lista para entregar.")
 
+from lib.zoho_http import zoho_json, zoho_lista
+
 # ── ZOHO HELPERS ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3000, show_spinner=False)
@@ -37,7 +39,8 @@ def get_access_token(refresh_token, client_id, client_secret):
         "client_secret": client_secret,
         "grant_type":    "refresh_token",
     })
-    return r.json().get("access_token")
+    datos, error = zoho_json(r, "token OAuth")
+    return (datos or {}).get("access_token"), error
 
 @st.cache_data(ttl=600, show_spinner=False)
 def buscar_proyecto_por_ot(access_token, portal_id, ot):
@@ -46,17 +49,19 @@ def buscar_proyecto_por_ot(access_token, portal_id, ot):
     index = 1
     while True:
         r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"búsqueda OT index={index}")
+        if error:
+            return None, error
         if not batch:
             break
         for p in batch:
             ot_upper = ot.strip().upper()
             if ot_upper == p.get("key", "").upper() or ot_upper in p.get("name", "").upper():
-                return p
+                return p, None
         if len(batch) < 100:
             break
         index += 100
-    return None
+    return None, None
 
 @st.cache_data(ttl=600, show_spinner=False)
 def listar_ots_activas(access_token, portal_id):
@@ -67,7 +72,9 @@ def listar_ots_activas(access_token, portal_id):
     index = 1
     while True:
         r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"OTs activas index={index}")
+        if error:
+            return rows, error
         if not batch:
             break
         for p in batch:
@@ -83,7 +90,7 @@ def listar_ots_activas(access_token, portal_id):
         if len(batch) < 100:
             break
         index += 100
-    return rows
+    return rows, None
 
 def parse_custom_fields(custom_fields):
     result = {}
@@ -470,15 +477,18 @@ VENDEDORES = ['Alicia Jensen', 'Camila Huber', 'Cristian Astaburuaga', 'Edgardo 
 portal_id = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
 
 try:
-    token = get_access_token(
+    token, error_token = get_access_token(
         st.secrets["ZOHO_REFRESH_TOKEN"],
         st.secrets["ZOHO_CLIENT_ID"],
         st.secrets["ZOHO_CLIENT_SECRET"],
     )
     ZOHO_OK = bool(token)
-except Exception:
-    token = None
+except Exception as e:
+    token, error_token = None, str(e)
     ZOHO_OK = False
+
+if error_token:
+    st.error(f"❌ {error_token}")
 
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
 for k, v in {"zoho_data": {}, "last_ot": "", "zoho_msg": ()}.items():
@@ -494,7 +504,9 @@ def panel_ots(key_busq, key_tabla):
         return
     with st.expander("📋 Ver OTs activas (Inicio sin agenda / Reunión KO / Agenda por confirmar)", expanded=False):
         with st.spinner("Cargando OTs..."):
-            ots = listar_ots_activas(token, portal_id)
+            ots, error_ots = listar_ots_activas(token, portal_id)
+        if error_ots:
+            st.error(f"❌ {error_ots}")
         if ots:
             busq = st.text_input("🔍 Filtrar", placeholder="Buscar OT, nombre o consultor...", key=key_busq)
             df_ots = pd.DataFrame(ots)
@@ -507,7 +519,7 @@ def panel_ots(key_busq, key_tabla):
                          key=key_tabla)
             st.caption(f"{len(df_ots)} proyectos · copia la OT y pégala en el campo de abajo")
         else:
-            st.info("No hay proyectos en estos estados.")
+            st.info("Zoho no devolvió proyectos en estos estados (respuesta vacía o sin datos).")
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
@@ -524,7 +536,9 @@ with tab_rem:
 
     if ot and ot != st.session_state.last_ot and ZOHO_OK:
         with st.spinner(f"🔍 Buscando OT {ot} en Zoho..."):
-            proyecto = buscar_proyecto_por_ot(token, portal_id, ot)
+            proyecto, error_busq = buscar_proyecto_por_ot(token, portal_id, ot)
+        if error_busq:
+            st.error(f"❌ {error_busq}")
         if proyecto:
             datos = extraer_datos_zoho(proyecto)
             st.session_state.zoho_data  = datos

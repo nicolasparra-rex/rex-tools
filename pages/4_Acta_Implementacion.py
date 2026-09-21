@@ -131,6 +131,8 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
+from lib.zoho_http import zoho_json, zoho_lista
+
 # ── ZOHO HELPERS ─────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3000, show_spinner=False)
@@ -141,7 +143,8 @@ def _get_token(refresh_token, client_id, client_secret):
         "client_secret": client_secret,
         "grant_type":    "refresh_token",
     })
-    return r.json().get("access_token")
+    datos, error = zoho_json(r, "token OAuth")
+    return (datos or {}).get("access_token"), error
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _listar_ots(access_token, portal_id):
@@ -152,7 +155,9 @@ def _listar_ots(access_token, portal_id):
     index = 1
     while True:
         r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"OTs en curso index={index}")
+        if error:
+            return rows, error
         if not batch:
             break
         for p in batch:
@@ -168,7 +173,7 @@ def _listar_ots(access_token, portal_id):
         if len(batch) < 100:
             break
         index += 100
-    return rows
+    return rows, None
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _buscar_ot(access_token, portal_id, ot):
@@ -177,17 +182,19 @@ def _buscar_ot(access_token, portal_id, ot):
     index = 1
     while True:
         r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"búsqueda OT index={index}")
+        if error:
+            return None, error
         if not batch:
             break
         for p in batch:
             ot_up = ot.strip().upper()
             if ot_up == p.get("key", "").upper() or ot_up in p.get("name", "").upper():
-                return p
+                return p, None
         if len(batch) < 100:
             break
         index += 100
-    return None
+    return None, None
 
 def _parse_cf(custom_fields):
     result = {}
@@ -225,17 +232,20 @@ def _extraer_zoho(proyecto):
     }
 
 try:
-    _token = _get_token(
+    _token, _error_token = _get_token(
         st.secrets["ZOHO_REFRESH_TOKEN"],
         st.secrets["ZOHO_CLIENT_ID"],
         st.secrets["ZOHO_CLIENT_SECRET"],
     )
     _PORTAL_ID = st.secrets.get("ZOHO_PORTAL_ID", "757079135")
     ZOHO_OK = bool(_token)
-except Exception:
-    _token = None
+except Exception as e:
+    _token, _error_token = None, str(e)
     _PORTAL_ID = "757079135"
     ZOHO_OK = False
+
+if _error_token:
+    st.error(f"❌ {_error_token}")
 
 for k, v in {"zoho_acta": {}, "last_ot_acta": "", "zoho_acta_msg": ()}.items():
     if k not in st.session_state:
@@ -257,7 +267,9 @@ with col_form:
                     st.cache_data.clear()
                     st.rerun()
             with st.spinner("Cargando OTs..."):
-                ots = _listar_ots(_token, _PORTAL_ID)
+                ots, error_ots = _listar_ots(_token, _PORTAL_ID)
+            if error_ots:
+                st.error(f"❌ {error_ots}")
             if ots:
                 busq = st.text_input("🔍 Filtrar", placeholder="Buscar por OT, nombre o consultor...", key="acta_busq_ot")
                 df_ots = pd.DataFrame(ots)
@@ -270,13 +282,15 @@ with col_form:
                              key="acta_tabla_ots")
                 st.caption(f"{len(df_ots)} proyectos · copia la OT y pégala en el campo de abajo")
             else:
-                st.info("No hay proyectos en estos estados.")
+                st.info("Zoho no devolvió proyectos en curso (respuesta vacía o sin datos).")
 
     ot_input = st.text_input("OT (Orden de Trabajo)", placeholder="Ej: RE-2910 o 2910", key="acta_ot")
 
     if ot_input and ot_input != st.session_state.last_ot_acta and ZOHO_OK:
         with st.spinner(f"Buscando OT {ot_input} en Zoho..."):
-            proyecto = _buscar_ot(_token, _PORTAL_ID, ot_input)
+            proyecto, error_busq = _buscar_ot(_token, _PORTAL_ID, ot_input)
+        if error_busq:
+            st.error(f"❌ {error_busq}")
         if proyecto:
             datos = _extraer_zoho(proyecto)
             st.session_state.zoho_acta     = datos

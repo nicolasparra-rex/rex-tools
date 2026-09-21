@@ -5,6 +5,8 @@ import json
 from datetime import datetime, date
 from calendar import monthrange
 
+from lib.zoho_http import zoho_json, zoho_lista
+
 st.set_page_config(page_title="Dashboard | Rex+ Tools", page_icon="📊", layout="wide")
 
 try:
@@ -30,8 +32,8 @@ def get_access_token(refresh_token, client_id, client_secret):
         "client_secret": client_secret,
         "grant_type":    "refresh_token",
     })
-    data = r.json()
-    return data.get("access_token")
+    datos, error = zoho_json(r, "token OAuth")
+    return (datos or {}).get("access_token"), error
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -42,14 +44,16 @@ def get_all_projects(access_token, portal_id):
     index = 1
     while True:
         r = requests.get(url, headers=headers, params={"range": 100, "index": index})
-        batch = r.json().get("projects", [])
+        batch, error = zoho_lista(r, "projects", f"proyectos index={index}")
+        if error:
+            return all_projects, error
         if not batch:
             break
         all_projects.extend(batch)
         if len(batch) < 100:
             break
         index += 100
-    return all_projects
+    return all_projects, None
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -130,21 +134,28 @@ with col_btn:
         st.rerun()
 
 with st.spinner("Conectando con Zoho..."):
-    token = get_access_token(
+    token, error_token = get_access_token(
         st.secrets["ZOHO_REFRESH_TOKEN"],
         st.secrets["ZOHO_CLIENT_ID"],
         st.secrets["ZOHO_CLIENT_SECRET"],
     )
+
+if error_token:
+    st.error(f"❌ {error_token}")
 
 if not token:
     st.error("❌ No se pudo obtener el token.")
     st.stop()
 
 with st.spinner("Cargando proyectos..."):
-    projects = get_all_projects(token, portal_id)
+    projects, error_projects = get_all_projects(token, portal_id)
+
+if error_projects:
+    st.error(f"❌ {error_projects}")
 
 if not projects:
-    st.warning("No se encontraron proyectos.")
+    st.warning("Zoho no devolvió proyectos (respuesta vacía o sin datos). "
+               "Pulsa 🔄 Actualizar para reintentar.")
     st.stop()
 
 df = build_df(projects)
