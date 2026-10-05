@@ -18,6 +18,13 @@ sys.path.insert(0, str(_ROOT / "lib"))
 
 from lib.branding import aplicar_branding, aplicar_footer, hero
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('5_Libro_Remuneraciones')
+
 st.set_page_config(
     page_title="Migración Historia LRE | Rex+ Tools",
     page_icon="📊",

@@ -8,6 +8,13 @@ import io
 from comunas_chile import REGIONES, COMUNAS
 from lib.branding import aplicar_branding, aplicar_footer, hero
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('1_Validador_Empleados')
+
 st.set_page_config(
     page_title="Validador de Empleados | Rex+ Tools",
     page_icon="📋",
