@@ -3,6 +3,10 @@ Rex+ Tools - Página principal
 Muestra un dashboard con cards clickeables hacia cada herramienta.
 """
 
+import faulthandler, sys
+
+faulthandler.enable(file=sys.stderr, all_threads=True)
+
 import streamlit as st
 from lib.branding import aplicar_branding, aplicar_footer, hero
 
