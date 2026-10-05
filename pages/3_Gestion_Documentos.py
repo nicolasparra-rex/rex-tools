@@ -24,6 +24,13 @@ from pathlib import Path, PurePosixPath
 
 from lib.branding import aplicar_branding, aplicar_footer, hero
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('3_Gestion_Documentos')
+
 st.set_page_config(
     page_title="Gestión Documentos | Rex+ Tools",
     page_icon="📂",

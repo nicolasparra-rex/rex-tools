@@ -24,6 +24,13 @@ from branding import aplicar_branding, aplicar_footer, hero
 from extractor import extract_all
 from generator import generate_acta
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('4_Acta_Implementacion')
+
 st.set_page_config(
     page_title="Acta de Implementación · REX+",
     page_icon="📄",

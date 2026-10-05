@@ -24,6 +24,13 @@ from pathlib import Path, PurePosixPath
 
 from lib.branding import aplicar_branding, aplicar_footer, hero
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('2_Progestion')
+
 st.set_page_config(
     page_title="Progestion | Rex+ Tools",
     page_icon="📄",

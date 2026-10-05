@@ -18,6 +18,13 @@ try:
 except ImportError:
     BRANDING = False
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('7_Minutas')
+
 st.set_page_config(page_title="Minutas | Rex+ Tools", page_icon="📋", layout="wide")
 
 if BRANDING:

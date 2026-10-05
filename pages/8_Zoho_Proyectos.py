@@ -6,6 +6,13 @@ from datetime import datetime
 
 from lib.zoho_http import zoho_json, zoho_lista
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('8_Zoho_Proyectos')
+
 st.set_page_config(page_title="Zoho Proyectos | Rex+ Tools", page_icon="📋", layout="wide")
 
 try:
