@@ -695,6 +695,14 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         cid = mapping.get(norm(h))
         if cid: _by_norm.setdefault(cid, OrderedDict())[norm(h)] = i
     id_cols = OrderedDict((cid, list(m.values())) for cid, m in _by_norm.items())
+    # APV régimen B (letra B / con rebaja): rebaja la base del impuesto único. TODOS los APV salen igual
+    # como 'apvi' en el archivo; esto es SOLO para detectar, por el rótulo de la columna del libro, cuáles
+    # son régimen B y sumarlos a las rebajas del impuesto. 'APV A' o APV sin letra -> NO rebaja (seguro).
+    def _apv_regimen_b(h):
+        toks = norm(h).split(); nn = " ".join(toks)
+        return ("b" in toks) or ("con rebaja" in nn) or ("letra b" in nn) or ("42 bis" in nn)
+    _apv_b_cols = [i for _c in ("apvi", "apvc", "apviConvenido", "afpAhor")
+                   for i in id_cols.get(_c, []) if _apv_regimen_b(hdr[i])]
     def grp_of(cols):
         i = cols[0]
         if th_i is not None and i < th_i: return "haber"
@@ -766,7 +774,8 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         # tope NO rebaja impuesto. Para rentas bajo el tope sin adicional, min() deja su 7% real.
         _salud_tope = round(tope_afp * 0.07) if tope_afp else 0
         _salud_ded = min(sums.get("isapre", 0), _salud_tope) if _salud_tope else sums.get("isapre", 0)
-        rebajas = sums.get("afp", 0) + _salud_ded + sums.get("cesEmpleado", 0)
+        apv_b = sum(_num(row[i]) for i in _apv_b_cols)   # APV régimen B: rebaja la base del impuesto
+        rebajas = sums.get("afp", 0) + _salud_ded + sums.get("cesEmpleado", 0) + apv_b
         afp_m = sums.get("afp", 0); sis_m = sums.get("sis", 0)
         # Renta imponible AFP: del libro si viene; si NO (el libro no la trae), se DERIVA del monto de una
         # cotización que sea % puro del imponible (AFP ÷ tasa, o SIS ÷ tasa). No afecta la cuadratura
@@ -867,8 +876,9 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if "aporteFAPPCEV" not in _ya: add("aporteFAPPCEV", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_fappcev, grp="aporte")
         if "cesAporteCi" not in _ya:   add("cesAporteCi", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte")
         if "cesAporteSol" not in _ya:  add("cesAporteSol", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=_tope(base_afp, tope_afp))
-        # totalesEmpl: AFECTO = imponible del mes; Cotización = imponible topeado (PESOS, entero) al tope AFP.
-        add("totalesEmpl", liq, afecto=base_afp, cot=round(_tope(base_afp, tope_afp)), grp="total")
+        # totalesEmpl: AFECTO = imponible del mes TOPEADO al tope AFP (igual que el resto de conceptos
+        # imponibles); Cotización = imponible topeado (PESOS, entero) al tope AFP.
+        add("totalesEmpl", liq, afecto=_tope(base_afp, tope_afp), cot=round(_tope(base_afp, tope_afp)), grp="total")
         H = sum(r[4] for g, r in emp_rows if g == "haber")
         D = sum(r[4] for g, r in emp_rows if g == "desc")
         T = next((r[4] for g, r in emp_rows if g == "total"), 0)
