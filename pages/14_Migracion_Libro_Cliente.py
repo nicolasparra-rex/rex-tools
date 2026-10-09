@@ -120,13 +120,6 @@ _XLMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _ETIQ_CLASIF = {"af": "AFP", "is": "Salud", "mu": "Mutual", "ca": "Caja/CCAF",
                 "ap": "APV", "ie": "Educacional", "ot": "Otro"}
 
-try:
-    from lib.mem import log_mem
-except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
-    def log_mem(_pagina): pass
-
-log_mem('14_Migracion_Libro_Cliente')
-
 st.set_page_config(page_title="Rex+ | Conversor a Migración Detalle", page_icon="📘", layout="wide")
 aplicar_branding(titulo_pagina="Migración Detalle", badge="BETA")
 
