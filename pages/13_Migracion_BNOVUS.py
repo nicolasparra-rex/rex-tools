@@ -35,6 +35,13 @@ import base64
 # ----------------------------------------------------------------------------- #
 #  Config de página + branding rex-tools (igual que las demás páginas)
 # ----------------------------------------------------------------------------- #
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('13_Migracion_BNOVUS')
+
 st.set_page_config(page_title="Migración BNOVUS | Rex+ Tools",
                    page_icon="👥", layout="wide")
 try:

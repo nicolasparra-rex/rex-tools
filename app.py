@@ -9,6 +9,9 @@ faulthandler.enable(file=sys.stderr, all_threads=True)
 
 import streamlit as st
 from lib.branding import aplicar_branding, aplicar_footer, hero
+from lib.mem import log_mem
+
+log_mem("app.py")
 
 st.set_page_config(
     page_title="Rex+ Tools",

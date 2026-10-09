@@ -17,6 +17,13 @@ DATA_DIR = "data"  # Carpeta con archivos de referencia
 # ─────────────────────────────────────────────
 # ESTILOS REX+
 # ─────────────────────────────────────────────
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('10_app_Migracion')
+
 st.set_page_config(
     page_title="Rex+ | Liquidaciones en detalle desde LRE",
     page_icon="💼",

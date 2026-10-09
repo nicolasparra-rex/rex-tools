@@ -23,6 +23,13 @@ import streamlit as st
 
 from lib.zoho_http import zoho_json, zoho_lista
 
+try:
+    from lib.mem import log_mem
+except ImportError:  # si lib/ no esta en el path, el log no debe tumbar la pagina
+    def log_mem(_pagina): pass
+
+log_mem('12_Bono_Consultores')
+
 st.set_page_config(page_title="Bono Consultores", page_icon="🔒", layout="wide")
 
 
