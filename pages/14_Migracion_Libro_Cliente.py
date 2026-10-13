@@ -132,14 +132,14 @@ st.markdown("""
 /* Componentes de carga en español */
 [data-testid="stFileUploaderDropzoneInstructions"] span{ font-size:0; }
 [data-testid="stFileUploaderDropzoneInstructions"] span::after{
-    content:"Arrastra el archivo aquí"; font-size:.875rem; color:#31333F; font-weight:500; }
+    content:"Arrastra el archivo aquí (se carga solo)"; font-size:.875rem; color:#31333F; font-weight:500; }
 [data-testid="stFileUploaderDropzoneInstructions"] small{ font-size:0; }
 [data-testid="stFileUploaderDropzoneInstructions"] small::after{
     content:"Límite 1 GB por archivo"; font-size:.8rem; color:#5c6773; }
 [data-testid="stFileUploaderDropzone"] button{ color:transparent !important; position:relative; min-width:8rem; }
 [data-testid="stFileUploaderDropzone"] button *{ color:transparent !important; fill:transparent !important; }
 [data-testid="stFileUploaderDropzone"] button::after{
-    content:"Subir archivo"; color:#fff !important; font-weight:600; font-size:.875rem;
+    content:"Buscar archivo"; color:#fff !important; font-weight:600; font-size:.875rem;
     position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
 
 /* Fallback de tipografía para los íconos del expander (evita ver 'keyboard_arrow_right' si no carga Material Symbols) */
