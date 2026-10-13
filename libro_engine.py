@@ -685,16 +685,28 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
                      if h and norm(h).strip(" *·:.-") in ("total haberes no imponibles", "haberes no imponibles")), None)
     def sidx(k): return struct.get(k)
     _struct_idx = set(struct.values())   # columnas estructurales: NO son conceptos aunque su nombre coincida
-    # Columnas por id Rex. Ante columnas con MISMO nombre normalizado que caen al mismo id (ej. un libro que
-    # trae 'Sueldo' contractual y 'SUELDO' pagado, ambos norma 'sueldo'), NO se suman las dos (sería doble
-    # conteo); se conserva la ÚLTIMA aparición: el sueldo del bloque de haberes (proporcional pagado) va
-    # después de la referencia contractual, y es el que cuadra con Total Haberes en meses parciales.
-    _by_norm = OrderedDict()   # cid -> OrderedDict(norma -> col)
+    # Columnas por id Rex. Se recolectan TODAS las apariciones de cada concepto.
+    #  - 'sueldoBase' es el ÚNICO que puede traer una columna de REFERENCIA contractual con el mismo
+    #    nombre que el pagado (ej. 'Sueldo' contractual + 'SUELDO' pagado): ahí NO se suman las dos
+    #    (sería doble conteo); se conserva la ÚLTIMA aparición (el pagado del bloque de haberes, que
+    #    cuadra con Total Haberes en meses parciales).
+    #  - Para TODO el resto, columnas con el mismo nombre SÍ se suman: un cliente puede mandar el mismo
+    #    concepto 2 o 3 veces separado por institución con idéntico rótulo (ej. 'APV B' / 'APV B'); si se
+    #    colapsaran, se perdería monto en el concepto Y en la rebaja del impuesto (régimen B).
+    _cols_raw = OrderedDict()   # cid -> [(norma, col), ...]
     for i, h in enumerate(hdr):
         if i in _struct_idx: continue
         cid = mapping.get(norm(h))
-        if cid: _by_norm.setdefault(cid, OrderedDict())[norm(h)] = i
-    id_cols = OrderedDict((cid, list(m.values())) for cid, m in _by_norm.items())
+        if cid: _cols_raw.setdefault(cid, []).append((norm(h), i))
+    _DEDUP_REF = {"sueldoBase"}
+    id_cols = OrderedDict()
+    for _cid, _pairs in _cols_raw.items():
+        if _cid in _DEDUP_REF:
+            _m = OrderedDict()
+            for _nm, _i in _pairs: _m[_nm] = _i   # conserva la última por nombre normalizado
+            id_cols[_cid] = list(_m.values())
+        else:
+            id_cols[_cid] = [_i for _nm, _i in _pairs]   # suma todas las apariciones
     # APV régimen B (letra B / con rebaja): rebaja la base del impuesto único. TODOS los APV salen igual
     # como 'apvi' en el archivo; esto es SOLO para detectar, por el rótulo de la columna del libro, cuáles
     # son régimen B y sumarlos a las rebajas del impuesto. 'APV A' o APV sin letra -> NO rebaja (seguro).
@@ -876,9 +888,10 @@ def generar_detalle(df, header_row, struct, mapping, params_row, cot_hist, confi
         if "aporteFAPPCEV" not in _ya: add("aporteFAPPCEV", 0, afecto=_tope(base_afp, tope_afp), inst=idafp, cot=cot_fappcev, grp="aporte")
         if "cesAporteCi" not in _ya:   add("cesAporteCi", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte")
         if "cesAporteSol" not in _ya:  add("cesAporteSol", 0, afecto=_tope(base_ces, tope_ces), inst=idafp, grp="aporte", p8=_tope(base_afp, tope_afp))
-        # totalesEmpl: AFECTO = imponible del mes TOPEADO al tope AFP (igual que el resto de conceptos
-        # imponibles); Cotización = imponible topeado (PESOS, entero) al tope AFP.
-        add("totalesEmpl", liq, afecto=_tope(base_afp, tope_afp), cot=round(_tope(base_afp, tope_afp)), grp="total")
+        # totalesEmpl: AFECTO = suma de haberes afectos del mes SIN topear (= 'suma_haber_afecto' del
+        # motor oficial modulo_dt / "suma de imponibles y tributables" de la planilla); la Cotización
+        # lleva ese imponible TOPEADO al tope AFP (PESOS, entero). OJO: el tope va en Cotización, NO en Afecto.
+        add("totalesEmpl", liq, afecto=base_afp, cot=round(_tope(base_afp, tope_afp)), grp="total")
         H = sum(r[4] for g, r in emp_rows if g == "haber")
         D = sum(r[4] for g, r in emp_rows if g == "desc")
         T = next((r[4] for g, r in emp_rows if g == "total"), 0)
